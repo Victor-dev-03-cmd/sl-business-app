@@ -12,6 +12,8 @@ import { MainTabNavigator } from './src/navigation/MainTabNavigator';
 import { NavigationContainer } from '@react-navigation/native';
 import { Session } from '@supabase/supabase-js';
 import * as SplashScreen from 'expo-splash-screen';
+import { ThemeProvider, useTheme } from './src/context/ThemeContext';
+import { LanguageProvider } from './src/context/LanguageContext';
 import { 
   useFonts,
   Outfit_100Thin,
@@ -28,10 +30,11 @@ import {
 // Keep the splash screen visible while we fetch resources
 SplashScreen.preventAutoHideAsync();
 
-export default function App() {
+function AppContent() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [showPasswordReset, setShowPasswordReset] = useState(false);
+  const { isDark } = useTheme();
 
   const [fontsLoaded] = useFonts({
     Outfit: Outfit_400Regular,
@@ -144,19 +147,23 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        <RNStatusBar translucent={!!true} backgroundColor="transparent" />
-        <View className="flex-1" onLayout={onLayoutRootView}>
+        <RNStatusBar
+          translucent={true}
+          backgroundColor="transparent"
+          barStyle={isDark ? "light-content" : "dark-content"}
+        />
+        <View className="flex-1" style={{ backgroundColor: isDark ? '#0F172A' : '#F9FAFB' }} onLayout={onLayoutRootView}>
           {showPasswordReset ? (
             <>
-              <UpdatePasswordScreen 
+              <UpdatePasswordScreen
                 onSuccess={() => setShowPasswordReset(false)}
                 onBack={() => setShowPasswordReset(false)}
               />
             </>
           ) : !session ? (
             <>
-              <AuthScreen 
-                onAuthSuccess={() => setShowPasswordReset(false)} 
+              <AuthScreen
+                onAuthSuccess={() => setShowPasswordReset(false)}
               />
             </>
           ) : (
@@ -165,5 +172,15 @@ export default function App() {
         </View>
       </NavigationContainer>
     </SafeAreaProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <LanguageProvider>
+      <ThemeProvider>
+        <AppContent />
+      </ThemeProvider>
+    </LanguageProvider>
   );
 }

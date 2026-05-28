@@ -81,13 +81,34 @@ export const AuthScreen = ({ onAuthSuccess, initialMode = 'login' }: AuthScreenP
         if (error) throw error;
         onAuthSuccess();
       } else if (mode === 'signup') {
-        const { error } = await supabase.auth.signUp({
+        // Use signInWithOtp for email verification with OTP code
+        const { data, error } = await supabase.auth.signInWithOtp({
           email,
-          password,
-          options: { data: { full_name: fullName } },
+          options: {
+            shouldCreateUser: true,
+            data: {
+              full_name: fullName,
+              password: password // Store for later use
+            }
+          }
         });
-        if (error) throw error;
-        Alert.alert('Success', 'Verification code sent to your email!');
+
+        if (error) {
+          // Check if it's because user already exists
+          if (error.message?.includes('already registered') || error.message?.includes('User already registered')) {
+            Alert.alert('Error', 'This email is already registered. Please sign in instead.');
+            setMode('login');
+            return;
+          }
+          throw error;
+        }
+
+        // OTP sent successfully
+        Alert.alert(
+          'Verification Code Sent',
+          `We've sent an 8-digit verification code to ${email}. Please check your email and enter the code below.\n\nThe code will expire in 10 minutes.`,
+          [{ text: 'OK' }]
+        );
         setMode('verify-otp');
       } else if (mode === 'forgot-password') {
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -97,13 +118,36 @@ export const AuthScreen = ({ onAuthSuccess, initialMode = 'login' }: AuthScreenP
         Alert.alert('Success', 'Password reset email sent!');
         setMode('login');
       } else if (mode === 'verify-otp') {
-        const { error } = await supabase.auth.verifyOtp({
+        if (!otp || otp.length < 6) {
+          Alert.alert('Error', 'Please enter the verification code');
+          return;
+        }
+
+        // Verify the OTP code
+        const { data, error } = await supabase.auth.verifyOtp({
           email,
           token: otp,
-          type: 'signup',
+          type: 'email'
         });
+
         if (error) throw error;
-        onAuthSuccess();
+
+        // If password was provided during signup, update it
+        if (password && data.session) {
+          const { error: updateError } = await supabase.auth.updateUser({
+            password: password
+          });
+          if (updateError) {
+            console.error('Error setting password:', updateError);
+            // Don't throw - user is verified, password can be reset later
+          }
+        }
+
+        Alert.alert(
+          'Success',
+          'Your email has been verified successfully!',
+          [{ text: 'OK', onPress: () => onAuthSuccess() }]
+        );
       } else if (mode === 'update-password') {
         const { error } = await supabase.auth.updateUser({ password });
         if (error) throw error;
@@ -112,7 +156,29 @@ export const AuthScreen = ({ onAuthSuccess, initialMode = 'login' }: AuthScreenP
         onAuthSuccess();
       }
     } catch (error: any) {
-      Alert.alert('Authentication Error', error.message);
+      console.error('Auth error:', error);
+
+      // Provide user-friendly error messages
+      let errorMessage = error.message;
+
+      if (error.message?.includes('Email not confirmed')) {
+        errorMessage = 'Please verify your email before signing in. Check your inbox for the verification link.';
+      } else if (error.message?.includes('Invalid login credentials')) {
+        errorMessage = 'Invalid email or password. Please check your credentials and try again.';
+      } else if (error.message?.includes('User already registered')) {
+        errorMessage = 'This email is already registered. Please sign in instead.';
+        setMode('login');
+      } else if (error.message?.includes('Unable to validate email address')) {
+        errorMessage = 'Please enter a valid email address.';
+      } else if (error.message?.includes('Password should be at least')) {
+        errorMessage = 'Password must be at least 6 characters long.';
+      } else if (error.message?.includes('sending confirmation email')) {
+        errorMessage = 'Account created but we couldn\'t send the confirmation email. Please contact support.';
+      } else if (error.message?.includes('Email rate limit exceeded')) {
+        errorMessage = 'Too many attempts. Please wait a few minutes before trying again.';
+      }
+
+      Alert.alert('Authentication Error', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -134,6 +200,8 @@ export const AuthScreen = ({ onAuthSuccess, initialMode = 'login' }: AuthScreenP
               onChangeText={setEmail}
               autoCapitalize="none"
               keyboardType="email-address"
+              editable={false}
+              style={{ opacity: 0.7 }}
             />
           </View>
           <View className="relative mt-4">
@@ -141,14 +209,23 @@ export const AuthScreen = ({ onAuthSuccess, initialMode = 'login' }: AuthScreenP
               <CheckCircle size={20} color="#94a3b8" />
             </View>
             <TextInput
-              placeholder="Verification Code"
+              placeholder="Enter 8-digit code"
               placeholderTextColor="#94a3b8"
-              className="bg-gray-50 text-gray-900 rounded-full py-4 pl-12 pr-4 border border-gray-200 focus:border-brand-blue font-outfit"
+              className="bg-gray-50 text-gray-900 rounded-full py-4 pl-12 pr-4 border border-gray-200 focus:border-brand-blue font-outfit text-center tracking-widest text-xl"
               value={otp}
-              onChangeText={setOtp}
+              onChangeText={(text) => {
+                // Only allow numbers and max 8 digits
+                const cleaned = text.replace(/[^0-9]/g, '').slice(0, 8);
+                setOtp(cleaned);
+              }}
               keyboardType="number-pad"
+              maxLength={8}
+              autoFocus
             />
           </View>
+          <Text className="text-xs text-gray-500 text-center font-outfit mt-2">
+            Didn't receive the code? Check your spam folder or tap "Resend Code" below.
+          </Text>
         </View>
       );
     }
