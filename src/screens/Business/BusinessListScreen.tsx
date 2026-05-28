@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, Image, ActivityIndicator, RefreshControl, Dimensions, StyleSheet, ScrollView, Alert, Platform, Modal, TextInput, Keyboard } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, Image, ActivityIndicator, RefreshControl, Dimensions, StyleSheet, ScrollView, Alert, Platform, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, MapPin, Star, Filter, Heart, Navigation, Compass, Crosshair, ChevronRight, X } from 'lucide-react-native';
 import * as Location from 'expo-location';
@@ -8,7 +8,6 @@ import { CATEGORY_GROUPS } from '../../data/categories';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../theme/colors';
-import { staticSearchItems } from '../../data/staticSearchData';
 
 // Conditional imports for web safety
 const MapView = Platform.OS === 'web' ? View : require('react-native-maps').default;
@@ -36,7 +35,6 @@ export const BusinessListScreen = () => {
   const [radius, setRadius] = useState(50000); // 50km default
   const [isLocating, setIsLocating] = useState(false);
   const [showSearchThisArea, setShowSearchThisArea] = useState(false);
-  const [localSearchQuery, setLocalSearchQuery] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>(type === 'business' ? q : '');
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [sortBy, setSortBy] = useState<'distance' | 'rating' | 'name'>('distance');
@@ -66,130 +64,6 @@ export const BusinessListScreen = () => {
     setRegion(newRegion);
   };
 
-  // Smart search parser: detects "location + category" queries
-  const parseSearchQuery = (query: string) => {
-    if (!query || query.trim().length === 0) return null;
-
-    const words = query.trim().toLowerCase().split(/\s+/);
-    if (words.length < 2) return null;
-
-    // Try location + category
-    for (let i = 0; i < words.length; i++) {
-      const potentialTown = words.slice(0, i + 1).join(' ');
-      const potentialCategory = words.slice(i + 1).join(' ');
-
-      const town = staticSearchItems.towns.find(t =>
-        t.name.toLowerCase() === potentialTown
-      );
-
-      if (town && potentialCategory) {
-        const category = staticSearchItems.categories.find(c =>
-          c.name.toLowerCase().includes(potentialCategory) ||
-          potentialCategory.includes(c.name.toLowerCase())
-        );
-
-        if (category) {
-          return {
-            town: town,
-            category: category.name,
-            type: 'location_category' as const
-          };
-        }
-      }
-    }
-
-    // Try category + location (reversed)
-    for (let i = 0; i < words.length; i++) {
-      const potentialCategory = words.slice(0, i + 1).join(' ');
-      const potentialTown = words.slice(i + 1).join(' ');
-
-      const category = staticSearchItems.categories.find(c =>
-        c.name.toLowerCase().includes(potentialCategory) ||
-        potentialCategory.includes(c.name.toLowerCase())
-      );
-
-      if (category && potentialTown) {
-        const town = staticSearchItems.towns.find(t =>
-          t.name.toLowerCase() === potentialTown
-        );
-
-        if (town) {
-          return {
-            town: town,
-            category: category.name,
-            type: 'location_category' as const
-          };
-        }
-      }
-    }
-
-    return null;
-  };
-
-  const handleLocalSearch = async () => {
-    if (!localSearchQuery.trim()) return;
-
-    Keyboard.dismiss();
-    setHasSearched(true);
-    setLoading(true);
-
-    // Try smart parsing first
-    const parsed = parseSearchQuery(localSearchQuery);
-
-    if (parsed) {
-      // Location + Category search
-      const newRegion = {
-        latitude: parsed.town.lat,
-        longitude: parsed.town.lon,
-        latitudeDelta: 0.15,
-        longitudeDelta: 0.15,
-      };
-      animateToRegion(newRegion);
-      setActiveCategory(parsed.category);
-
-      await fetchBusinesses(
-        parsed.town.lat,
-        parsed.town.lon,
-        radius,
-        '',
-        parsed.category
-      );
-    } else {
-      // Check if it's a town
-      const town = staticSearchItems.towns.find(t =>
-        t.name.toLowerCase() === localSearchQuery.trim().toLowerCase()
-      );
-
-      if (town) {
-        const newRegion = {
-          latitude: town.lat,
-          longitude: town.lon,
-          latitudeDelta: 0.15,
-          longitudeDelta: 0.15,
-        };
-        animateToRegion(newRegion);
-
-        await fetchBusinesses(
-          town.lat,
-          town.lon,
-          radius,
-          localSearchQuery,
-          activeCategory
-        );
-      } else {
-        // Regular business search
-        await fetchBusinesses(
-          region.latitude,
-          region.longitude,
-          radius,
-          localSearchQuery,
-          activeCategory
-        );
-      }
-    }
-
-    setLoading(false);
-  };
 
   const fetchBusinesses = async (centerLat: number, centerLng: number, currentRadius: number, query: string, category: string) => {
     try {
@@ -301,12 +175,14 @@ export const BusinessListScreen = () => {
 
       // Case 3: Town search with coordinates
       if (type === 'town' && initialLat && initialLng) {
+        console.log('Town search:', q, 'Coords:', initialLat, initialLng);
         const townRegion = {
           latitude: parseFloat(initialLat),
           longitude: parseFloat(initialLng),
           latitudeDelta: 0.15, // Wider view for towns
           longitudeDelta: 0.15,
         };
+        console.log('Setting region to:', townRegion);
         animateToRegion(townRegion);
 
         // Fetch businesses in this town
@@ -600,50 +476,16 @@ export const BusinessListScreen = () => {
       {/* Header & Filters */}
       <View className="z-50" style={{ backgroundColor: colors.surface }}>
         <View className="px-6 py-4" style={{ borderBottomWidth: 1, borderBottomColor: colors.border }}>
-          {/* Search Bar */}
-          <View className="mb-4 relative">
-            <View className="flex-row items-center rounded-2xl px-4 py-3" style={{ backgroundColor: colors.input.background }}>
-              <Search size={18} color={colors.text.tertiary} />
-              <TextInput
-                value={localSearchQuery}
-                onChangeText={setLocalSearchQuery}
-                onSubmitEditing={handleLocalSearch}
-                placeholder="Search location, category, or business..."
-                placeholderTextColor={colors.text.tertiary}
-                className="flex-1 ml-2 text-sm font-outfit"
-                style={{ color: colors.text.primary }}
-                returnKeyType="search"
-              />
-              {localSearchQuery.length > 0 && (
-                <View className="flex-row items-center gap-1">
-                  <TouchableOpacity
-                    onPress={() => {
-                      setLocalSearchQuery('');
-                      setBusinesses([]);
-                      setHasSearched(false);
-                    }}
-                    className="p-1.5 rounded-lg"
-                    style={{ backgroundColor: colors.surface }}
-                  >
-                    <X size={14} color={colors.text.tertiary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={handleLocalSearch}
-                    className="px-3 py-1.5 rounded-lg"
-                    style={{ backgroundColor: colors.brand.blue }}
-                  >
-                    <Text className="text-white text-xs font-bold font-outfit">Go</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-          </View>
-
           <View className="flex-row items-center justify-between mb-4">
             <View className="flex-1">
               <Text className="text-xl font-bold font-outfit" style={{ color: colors.brand.dark }}>
-                {q ? `Nearby "${q}"` : 'Nearby Businesses'}
+                Nearby Businesses
               </Text>
+              {businesses.length > 0 && suggestionData?.name && (
+                <Text className="text-xs font-outfit mt-0.5" style={{ color: colors.text.tertiary }}>
+                  Near {suggestionData.name}
+                </Text>
+              )}
             </View>
             <View className="flex-row items-center">
               <TouchableOpacity
@@ -722,6 +564,7 @@ export const BusinessListScreen = () => {
           </View>
         ) : (
           <MapView
+            key={`${region.latitude}-${region.longitude}`}
             ref={mapRef}
             provider={PROVIDER_GOOGLE}
             style={StyleSheet.absoluteFillObject}
@@ -869,11 +712,7 @@ export const BusinessListScreen = () => {
               <RefreshControl
                 refreshing={refreshing}
                 onRefresh={() => {
-                  if (localSearchQuery) {
-                    handleLocalSearch();
-                  } else {
-                    fetchBusinesses(region.latitude, region.longitude, radius, q, activeCategory);
-                  }
+                  fetchBusinesses(region.latitude, region.longitude, radius, q, activeCategory);
                   setShowSearchThisArea(false);
                 }}
               />

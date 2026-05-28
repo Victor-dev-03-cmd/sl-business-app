@@ -224,7 +224,36 @@ export const HomeScreen = () => {
       lat = suggestion.data.lat;
       lng = suggestion.data.lon;
       setIsSearchingLocation(false);
-    } else {
+    } else if (!suggestion && searchQuery) {
+      // Check if typed query is a town name (fast lookup)
+      const typedTown = staticSearchItems.towns.find(t =>
+        t.name.toLowerCase() === searchQuery.trim().toLowerCase()
+      );
+
+      if (typedTown && typedTown.data) {
+        // Instant town match! Use town coordinates
+        lat = typedTown.data.lat;
+        lng = typedTown.data.lon;
+        searchTerm = typedTown.name;
+        setIsSearchingLocation(false);
+
+        // Navigate immediately with town data
+        const parent = navigation.getParent();
+        if (parent) {
+          parent.navigate('Map', {
+            screen: 'MapMain',
+            params: {
+              q: typedTown.name,
+              lat: lat.toString(),
+              lng: lng.toString(),
+              type: 'town',
+              suggestionData: typedTown.data,
+            }
+          });
+        }
+        return;
+      }
+
       // For other searches, try to get current location
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
@@ -252,6 +281,8 @@ export const HomeScreen = () => {
       } finally {
         setIsSearchingLocation(false);
       }
+    } else {
+      setIsSearchingLocation(false);
     }
 
     // Navigate after location is determined
