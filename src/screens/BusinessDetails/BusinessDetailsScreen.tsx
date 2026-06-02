@@ -37,6 +37,7 @@ import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../theme/colors';
 import { ReportModal } from '../../components/ReportModal';
+import { formatPhoneWithCountryCode, formatPhoneForWhatsApp } from '../../utils/phoneHelpers';
 
 const { width, height } = Dimensions.get('window');
 const IMAGE_HEIGHT = height * 0.35;
@@ -260,15 +261,10 @@ export const BusinessDetailsScreen = () => {
 
       // Open WhatsApp with message
       if (business?.phone) {
-        const formattedPhone = business.phone.replace(/\D/g, '');
-        const finalPhone = formattedPhone.startsWith('0')
-          ? '94' + formattedPhone.substring(1)
-          : formattedPhone.startsWith('94')
-          ? formattedPhone
-          : '94' + formattedPhone;
+        const formattedPhone = formatPhoneForWhatsApp(business.phone);
 
         const whatsappText = `New Enquiry from SLBI:\n\nName: ${enquiryForm.name}\nPhone: ${enquiryForm.phone}\nMessage: ${enquiryForm.message}`;
-        const whatsappUrl = `https://wa.me/${finalPhone}?text=${encodeURIComponent(whatsappText)}`;
+        const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(whatsappText)}`;
 
         await Linking.openURL(whatsappUrl);
       }
@@ -365,7 +361,7 @@ export const BusinessDetailsScreen = () => {
         {
           text: 'Call',
           onPress: () => {
-            const phoneNumber = business.phone.replace(/[^0-9+]/g, '');
+            const phoneNumber = formatPhoneWithCountryCode(business.phone);
             Linking.openURL(`tel:${phoneNumber}`);
           }
         }
@@ -379,7 +375,7 @@ export const BusinessDetailsScreen = () => {
       return;
     }
 
-    const whatsappNumber = (business.whatsapp_number || business.phone).replace(/[^0-9]/g, '');
+    const whatsappNumber = formatPhoneForWhatsApp(business.whatsapp_number || business.phone);
     const message = `Hi, I found your business "${business.name}" on SL Business Index app.`;
     const url = `whatsapp://send?phone=${whatsappNumber}&text=${encodeURIComponent(message)}`;
 

@@ -42,14 +42,16 @@ export const BusinessListScreen = () => {
   const [showVerifiedOnly, setShowVerifiedOnly] = useState(false);
   const [expandedCardId, setExpandedCardId] = useState<number | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [isFabExpanded, setIsFabExpanded] = useState(false);
+  const [userHasBusiness, setUserHasBusiness] = useState(false);
 
   const mapRef = useRef<typeof MapView>(null);
   const regionChangeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [region, setRegion] = useState({
     latitude: parseFloat(initialLat) || COLOMBO_COORDS.latitude,
     longitude: parseFloat(initialLng) || COLOMBO_COORDS.longitude,
-    latitudeDelta: 0.05,
-    longitudeDelta: 0.05,
+    latitudeDelta: 0.02,
+    longitudeDelta: 0.02,
   });
 
   const animateToRegion = (newRegion: any) => {
@@ -62,6 +64,25 @@ export const BusinessListScreen = () => {
       }
     }
     setRegion(newRegion);
+  };
+
+  // Check if user already has a registered business
+  const checkUserBusiness = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('businesses')
+        .select('id')
+        .eq('owner_id', user.id)
+        .limit(1);
+
+      if (error) throw error;
+      setUserHasBusiness(data && data.length > 0);
+    } catch (error) {
+      console.error('Error checking user business:', error);
+    }
   };
 
 
@@ -107,6 +128,9 @@ export const BusinessListScreen = () => {
   };
 
   useEffect(() => {
+    // Check if user has business on mount
+    checkUserBusiness();
+
     const initializeSearch = async () => {
       // Only load businesses if coming from home search (with params)
       if (!q && !initialLat && !type) {
@@ -131,8 +155,8 @@ export const BusinessListScreen = () => {
             const businessRegion = {
               latitude: businessData.latitude,
               longitude: businessData.longitude,
-              latitudeDelta: 0.05,
-              longitudeDelta: 0.05,
+              latitudeDelta: 0.02,
+              longitudeDelta: 0.02,
             };
             animateToRegion(businessRegion);
             setSearchQuery(businessData.name);
@@ -157,8 +181,8 @@ export const BusinessListScreen = () => {
         const locationCategoryRegion = {
           latitude: parseFloat(initialLat),
           longitude: parseFloat(initialLng),
-          latitudeDelta: 0.15, // Wider view for location-based category search
-          longitudeDelta: 0.15,
+          latitudeDelta: 0.05, // Zoomed in view for location-based category search
+          longitudeDelta: 0.05,
         };
         animateToRegion(locationCategoryRegion);
 
@@ -175,14 +199,12 @@ export const BusinessListScreen = () => {
 
       // Case 3: Town search with coordinates
       if (type === 'town' && initialLat && initialLng) {
-        console.log('Town search:', q, 'Coords:', initialLat, initialLng);
         const townRegion = {
           latitude: parseFloat(initialLat),
           longitude: parseFloat(initialLng),
-          latitudeDelta: 0.15, // Wider view for towns
-          longitudeDelta: 0.15,
+          latitudeDelta: 0.05, // Zoomed in view for towns
+          longitudeDelta: 0.05,
         };
-        console.log('Setting region to:', townRegion);
         animateToRegion(townRegion);
 
         // Fetch businesses in this town
@@ -201,8 +223,8 @@ export const BusinessListScreen = () => {
         const providedRegion = {
           latitude: parseFloat(initialLat),
           longitude: parseFloat(initialLng),
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
         };
         animateToRegion(providedRegion);
 
@@ -229,8 +251,8 @@ export const BusinessListScreen = () => {
             const userRegion = {
               latitude: location.coords.latitude,
               longitude: location.coords.longitude,
-              latitudeDelta: 0.05,
-              longitudeDelta: 0.05,
+              latitudeDelta: 0.02,
+              longitudeDelta: 0.02,
             };
             animateToRegion(userRegion);
 
@@ -363,8 +385,8 @@ export const BusinessListScreen = () => {
       ...region,
       latitude: location.coords.latitude,
       longitude: location.coords.longitude,
-      latitudeDelta: 0.05, // Appropriate zoom level
-      longitudeDelta: 0.05,
+      latitudeDelta: 0.02, // Zoomed in view
+      longitudeDelta: 0.02,
     };
 
     // Animate to user's location
@@ -927,32 +949,50 @@ export const BusinessListScreen = () => {
         </View>
       </Modal>
 
-      {/* Floating Add Business Button */}
-      <TouchableOpacity
-        onPress={() => {
-          const parent = navigation.getParent();
-          if (parent) {
-            parent.navigate('Register');
-          }
-        }}
-        className="absolute bottom-8 right-6 shadow-2xl flex-row items-center px-5 py-4 rounded-full"
-        style={{
-          backgroundColor: colors.brand.dark,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.3,
-          shadowRadius: 8,
-          elevation: 8
-        }}
-        activeOpacity={0.9}
-      >
-        <View className="flex-row items-center">
-          <View className="w-6 h-6 rounded-full items-center justify-center mr-2" style={{ backgroundColor: colors.brand.gold }}>
-            <Text className="text-white font-bold text-sm">+</Text>
+      {/* Floating Add Business Button - Only show if user doesn't have a business */}
+      {!userHasBusiness && (
+        <TouchableOpacity
+          onPress={() => {
+            if (isFabExpanded) {
+              // Second click - navigate to register
+              const parent = navigation.getParent();
+              if (parent) {
+                parent.navigate('Register');
+              }
+            } else {
+              // First click - expand button
+              setIsFabExpanded(true);
+            }
+          }}
+          className="absolute bottom-8 right-6 shadow-2xl flex-row items-center rounded-full"
+          style={{
+            backgroundColor: colors.brand.dark,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 8,
+            elevation: 8,
+            paddingVertical: 16,
+            paddingHorizontal: isFabExpanded ? 20 : 16,
+          }}
+          activeOpacity={0.9}
+        >
+          <View className="flex-row items-center">
+            <View
+              className="w-6 h-6 rounded-full items-center justify-center"
+              style={{
+                backgroundColor: colors.brand.gold,
+                marginRight: isFabExpanded ? 8 : 0
+              }}
+            >
+              <Text className="text-white font-bold text-sm">+</Text>
+            </View>
+            {isFabExpanded && (
+              <Text className="text-white font-bold text-sm font-outfit">Add Business</Text>
+            )}
           </View>
-          <Text className="text-white font-bold text-sm font-outfit">Add Business</Text>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 };

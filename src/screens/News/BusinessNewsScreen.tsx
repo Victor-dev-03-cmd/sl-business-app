@@ -25,13 +25,16 @@ import {
   MessageSquare,
   MapPin,
   Briefcase,
-  ShieldCheck
+  ShieldCheck,
+  Plus
 } from 'lucide-react-native';
 import { useNavigation } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../theme/colors';
+import { formatPhoneWithCountryCode, formatPhoneForWhatsApp } from '../../utils/phoneHelpers';
+import { AddNewsModal } from '../../components/AddNewsModal';
 
 interface NewsPost {
   id: string;
@@ -63,6 +66,8 @@ export const BusinessNewsScreen = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedDistrict, setSelectedDistrict] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [hasVerifiedBusiness, setHasVerifiedBusiness] = useState(false);
 
   const MAIN_CATEGORY_GROUPS = [
     "Manpower Services",
@@ -84,7 +89,32 @@ export const BusinessNewsScreen = () => {
 
   useEffect(() => {
     fetchNews();
+    checkVerifiedBusiness();
   }, [selectedCategory, selectedDistrict, filterType]);
+
+  const checkVerifiedBusiness = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setHasVerifiedBusiness(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('businesses')
+        .select('id')
+        .eq('owner_id', user.id)
+        .eq('is_verified', true)
+        .eq('status', 'approved')
+        .limit(1);
+
+      if (error) throw error;
+      setHasVerifiedBusiness(!!(data && data.length > 0));
+    } catch (error) {
+      console.error('Error checking verified business:', error);
+      setHasVerifiedBusiness(false);
+    }
+  };
 
   const fetchNews = async () => {
     try {
@@ -139,11 +169,17 @@ export const BusinessNewsScreen = () => {
       [
         {
           text: 'Call',
-          onPress: () => Linking.openURL(`tel:${post.contact_phone}`)
+          onPress: () => {
+            const formattedPhone = formatPhoneWithCountryCode(post.contact_phone);
+            Linking.openURL(`tel:${formattedPhone}`);
+          }
         },
         {
           text: 'WhatsApp',
-          onPress: () => Linking.openURL(`https://wa.me/${post.contact_phone.replace(/[^\d]/g, '')}`)
+          onPress: () => {
+            const formattedPhone = formatPhoneForWhatsApp(post.contact_phone);
+            Linking.openURL(`https://wa.me/${formattedPhone}`);
+          }
         },
         { text: 'Cancel', style: 'cancel' }
       ]
@@ -248,7 +284,10 @@ export const BusinessNewsScreen = () => {
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <TouchableOpacity
-                onPress={() => Linking.openURL(`tel:${post.contact_phone}`)}
+                onPress={() => {
+                  const formattedPhone = formatPhoneWithCountryCode(post.contact_phone);
+                  Linking.openURL(`tel:${formattedPhone}`);
+                }}
                 style={{ backgroundColor: colors.brand.blue + '1A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, flexDirection: 'row', alignItems: 'center' }}
               >
                 <Phone size={12} color={colors.brand.blue} />
@@ -331,7 +370,8 @@ export const BusinessNewsScreen = () => {
           <TouchableOpacity
             onPress={(e) => {
               e.stopPropagation();
-              Linking.openURL(`tel:${post.contact_phone}`);
+              const formattedPhone = formatPhoneWithCountryCode(post.contact_phone);
+              Linking.openURL(`tel:${formattedPhone}`);
             }}
             style={{ backgroundColor: colors.brand.blue + '1A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, flexDirection: 'row', alignItems: 'center', marginRight: 8 }}
           >
@@ -340,7 +380,8 @@ export const BusinessNewsScreen = () => {
           <TouchableOpacity
             onPress={(e) => {
               e.stopPropagation();
-              Linking.openURL(`https://wa.me/${post.contact_phone.replace(/[^\d]/g, '')}`);
+              const formattedPhone = formatPhoneForWhatsApp(post.contact_phone);
+              Linking.openURL(`https://wa.me/${formattedPhone}`);
             }}
             style={{ backgroundColor: '#ecfdf5', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, flexDirection: 'row', alignItems: 'center' }}
           >
@@ -574,6 +615,34 @@ export const BusinessNewsScreen = () => {
           </>
         )}
       </ScrollView>
+
+      {/* Floating Add News Button - Only for verified vendors */}
+      {hasVerifiedBusiness && (
+        <TouchableOpacity
+          onPress={() => setShowAddModal(true)}
+          className="absolute bottom-6 right-6 w-16 h-16 rounded-full items-center justify-center shadow-lg"
+          style={{
+            backgroundColor: colors.brand.blue,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 8,
+            elevation: 8,
+          }}
+        >
+          <Plus size={28} color="#ffffff" strokeWidth={3} />
+        </TouchableOpacity>
+      )}
+
+      {/* Add News Modal */}
+      <AddNewsModal
+        visible={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSuccess={() => {
+          fetchNews();
+          checkVerifiedBusiness();
+        }}
+      />
     </SafeAreaView>
   );
 };

@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, TouchableOpacity, Text, Platform } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { Home, Map as MapIcon, PlusCircle, User as UserIcon } from 'lucide-react-native';
+import { Home, Map as MapIcon, PlusCircle, User as UserIcon, TrendingUp } from 'lucide-react-native';
 import { HomeScreen } from '../screens/Home/HomeScreen';
 import { BusinessListScreen } from '../screens/Business/BusinessListScreen';
 import { RegisterBusinessScreen } from '../screens/RegisterBusiness/RegisterBusinessScreen';
+import { VendorAnalyticsScreen } from '../screens/Vendor/VendorAnalyticsScreen';
 import { SettingsScreen } from '../screens/Settings/SettingsScreen';
 import { BusinessNewsScreen } from '../screens/News/BusinessNewsScreen';
 import { BusinessDetailsScreen } from '../screens/BusinessDetails/BusinessDetailsScreen';
@@ -19,6 +20,7 @@ import { useTheme } from '../context/ThemeContext';
 import { Colors } from '../theme/colors';
 import { useLanguage } from '../context/LanguageContext';
 import { getTextStyles } from '../utils/fontHelpers';
+import { supabase } from '../lib/supabase';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -57,6 +59,7 @@ const CustomTabBar = ({ state, descriptors, navigation }: any) => {
             case 'Home': return t('nav.home');
             case 'Map': return t('nav.map');
             case 'Register': return 'Add Business';
+            case 'Analytics': return 'Analytics';
             case 'Account': return t('nav.account');
             default: return routeName;
           }
@@ -145,6 +148,15 @@ const RegisterStack = () => {
   );
 };
 
+// Vendor Analytics Stack Navigator
+const AnalyticsStack = () => {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="AnalyticsMain" component={VendorAnalyticsScreen} />
+    </Stack.Navigator>
+  );
+};
+
 // Account Stack Navigator
 const AccountStack = ({ session }: { session: Session | null }) => {
   return (
@@ -162,6 +174,41 @@ const AccountStack = ({ session }: { session: Session | null }) => {
 };
 
 export const MainTabNavigator = ({ session }: { session: Session | null }) => {
+  const [isVendor, setIsVendor] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    checkUserRole();
+  }, [session]);
+
+  const checkUserRole = async () => {
+    try {
+      if (!session?.user?.id) {
+        setIsVendor(false);
+        setLoading(false);
+        return;
+      }
+
+      // Check if user has any businesses
+      const { data: businesses } = await supabase
+        .from('businesses')
+        .select('id')
+        .eq('owner_id', session.user.id)
+        .limit(1);
+
+      setIsVendor(!!(businesses && businesses.length > 0));
+    } catch (error) {
+      console.error('Error checking user role:', error);
+      setIsVendor(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return null; // or a loading screen
+  }
+
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
@@ -186,14 +233,25 @@ export const MainTabNavigator = ({ session }: { session: Session | null }) => {
           tabBarLabel: 'Map'
         }}
       />
-      <Tab.Screen
-        name="Register"
-        component={RegisterStack}
-        options={{
-          tabBarIcon: (props: any) => <PlusCircle {...props} />,
-          tabBarLabel: 'Register'
-        }}
-      />
+      {isVendor ? (
+        <Tab.Screen
+          name="Analytics"
+          component={AnalyticsStack}
+          options={{
+            tabBarIcon: (props: any) => <TrendingUp {...props} />,
+            tabBarLabel: 'Analytics'
+          }}
+        />
+      ) : (
+        <Tab.Screen
+          name="Register"
+          component={RegisterStack}
+          options={{
+            tabBarIcon: (props: any) => <PlusCircle {...props} />,
+            tabBarLabel: 'Register'
+          }}
+        />
+      )}
       <Tab.Screen
         name="Account"
         options={{

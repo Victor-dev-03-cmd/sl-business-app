@@ -68,28 +68,13 @@ export const RegisterBusinessScreen = () => {
   const [gettingLocation, setGettingLocation] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [existingBusiness, setExistingBusiness] = useState<any>(null);
-
-  const categories = [
-    'Food & Dining',
-    'Shopping & Retail',
-    'Health & Wellness',
-    'Professional Services',
-    'Home & Garden',
-    'Automotive',
-    'Entertainment',
-    'Education',
-    'Technology',
-    'Beauty & Personal Care',
-    'Travel & Tourism',
-    'Real Estate',
-    'Finance & Insurance',
-    'Sports & Fitness',
-    'Others'
-  ];
+  const [categories, setCategories] = useState<string[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(true);
 
   useEffect(() => {
     checkAuth();
     checkExistingBusiness();
+    fetchCategories();
   }, []);
 
   const checkAuth = async () => {
@@ -128,6 +113,50 @@ export const RegisterBusinessScreen = () => {
     }
   };
 
+  const fetchCategories = async () => {
+    try {
+      setLoadingCategories(true);
+      const { data, error } = await supabase
+        .from('categories')
+        .select('name')
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        setCategories(data.map((cat) => cat.name));
+      } else {
+        // Fallback categories if database is empty
+        setCategories([
+          'Food & Dining',
+          'Shopping & Retail',
+          'Health & Medical',
+          'Professional Services',
+          'Home Appliances & Services',
+          'Automotive',
+          'Entertainment',
+          'Education',
+          'Technology',
+          'Beauty & Health',
+          'Travel & Tourism',
+          'Others'
+        ]);
+      }
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+      // Fallback categories on error
+      setCategories([
+        'Food & Dining',
+        'Shopping & Retail',
+        'Health & Medical',
+        'Professional Services',
+        'Others'
+      ]);
+    } finally {
+      setLoadingCategories(false);
+    }
+  };
+
   // Validation functions
   const validateNIC = (nic: string): boolean => {
     const oldNicRegex = /^[5-9][0-9]{8}[vVxX]$/;
@@ -143,17 +172,106 @@ export const RegisterBusinessScreen = () => {
   const getCurrentLocation = async () => {
     setGettingLocation(true);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-
-      if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Location permission is required to set business address.');
+      // Check if location services are enabled
+      const isEnabled = await Location.hasServicesEnabledAsync();
+      if (!isEnabled) {
+        Alert.alert(
+          'Location Services Disabled',
+          'Your device location is turned off. Please enable it:\n\n' +
+          '• Android: Settings → Location → Turn ON\n' +
+          '• iOS: Settings → Privacy → Location Services → Turn ON\n\n' +
+          'Or you can manually enter your business address below.',
+          [{ text: 'OK' }]
+        );
         setGettingLocation(false);
         return;
       }
 
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.BestForNavigation,
-      });
+      // Request permissions
+      const { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'Location permission is needed to auto-fill your business address.\n\n' +
+          'You can grant permission in app settings, or manually enter the address below.',
+          [{ text: 'OK' }]
+        );
+        setGettingLocation(false);
+        return;
+      }
+
+      // Show a loading message after 2 seconds
+      const timeoutId = setTimeout(() => {
+        Alert.alert(
+          'Getting Location...',
+          'This may take a few moments. Please wait or cancel and enter address manually.',
+          [{ text: 'OK' }]
+        );
+      }, 2000);
+
+      // Try with last known location first (faster)
+      let loc;
+      try {
+        loc = await Location.getLastKnownPositionAsync({
+          maxAge: 60000, // Accept location from last 60 seconds
+          requiredAccuracy: 100, // Within 100 meters
+        });
+
+        if (loc && loc.coords) {
+          console.log('Using last known location');
+          clearTimeout(timeoutId);
+        } else {
+          throw new Error('No recent location available');
+        }
+      } catch (lastKnownError) {
+        console.log('Last known location failed, getting fresh location');
+        // Get fresh location with timeouts
+        try {
+          loc = await Promise.race([
+            Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.High,
+            }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('High accuracy timeout')), 8000)
+            )
+          ]) as Location.LocationObject;
+          clearTimeout(timeoutId);
+        } catch (highAccuracyError) {
+          console.log('High accuracy failed, trying balanced:', highAccuracyError);
+          try {
+            loc = await Promise.race([
+              Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Balanced,
+              }),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Balanced accuracy timeout')), 6000)
+              )
+            ]) as Location.LocationObject;
+            clearTimeout(timeoutId);
+          } catch (balancedError) {
+            console.log('Balanced accuracy failed, trying low:', balancedError);
+            try {
+              loc = await Promise.race([
+                Location.getCurrentPositionAsync({
+                  accuracy: Location.Accuracy.Low,
+                }),
+                new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error('Low accuracy timeout')), 4000)
+                )
+              ]) as Location.LocationObject;
+              clearTimeout(timeoutId);
+            } catch (lowError) {
+              clearTimeout(timeoutId);
+              throw lowError;
+            }
+          }
+        }
+      }
+
+      if (!loc || !loc.coords) {
+        throw new Error('Unable to get location coordinates');
+      }
 
       setLocation({
         lat: loc.coords.latitude,
@@ -161,22 +279,69 @@ export const RegisterBusinessScreen = () => {
       });
 
       // Reverse geocode to get address
-      const addresses = await Location.reverseGeocodeAsync({
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude
-      });
+      try {
+        const addresses = await Location.reverseGeocodeAsync({
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude
+        });
 
-      if (addresses && addresses.length > 0) {
-        const addr = addresses[0];
-        const shortAddr = `${addr.street || ''}, ${addr.city || ''}`.trim();
-        const fullAddr = `${addr.street || ''}, ${addr.city || ''}, ${addr.region || ''}, ${addr.country || ''}`.trim();
+        if (addresses && addresses.length > 0) {
+          const addr = addresses[0];
+          const streetPart = addr.street || addr.name || '';
+          const cityPart = addr.city || addr.subregion || '';
 
-        setAddress(shortAddr);
-        setDetailedAddress(fullAddr);
+          const shortAddr = [streetPart, cityPart].filter(Boolean).join(', ');
+          const fullAddr = [
+            streetPart,
+            cityPart,
+            addr.region || '',
+            addr.country || 'Sri Lanka'
+          ].filter(Boolean).join(', ');
+
+          setAddress(shortAddr || `${loc.coords.latitude.toFixed(6)}, ${loc.coords.longitude.toFixed(6)}`);
+          setDetailedAddress(fullAddr || shortAddr);
+        } else {
+          // If reverse geocoding fails, use coordinates
+          const coordsStr = `${loc.coords.latitude.toFixed(6)}, ${loc.coords.longitude.toFixed(6)}`;
+          setAddress(coordsStr);
+          setDetailedAddress(coordsStr);
+        }
+      } catch (geocodeError) {
+        console.log('Reverse geocoding failed:', geocodeError);
+        // Use coordinates as fallback
+        const coordsStr = `${loc.coords.latitude.toFixed(6)}, ${loc.coords.longitude.toFixed(6)}`;
+        setAddress(coordsStr);
+        setDetailedAddress(coordsStr);
       }
-    } catch (error) {
+
+      Alert.alert('Success', 'Location captured successfully! You can edit the address if needed.');
+    } catch (error: any) {
       console.error('Error getting location:', error);
-      Alert.alert('Error', 'Failed to get current location');
+
+      let errorTitle = 'Unable to Get Location';
+      let errorMessage = '';
+
+      if (error.message?.includes('timeout')) {
+        errorMessage = 'Location request timed out.\n\n' +
+          'Tips:\n' +
+          '• Move to an open area (away from buildings)\n' +
+          '• Make sure you have good GPS signal\n' +
+          '• Or manually enter your address below';
+      } else if (error.message?.includes('unavailable')) {
+        errorMessage = 'Location is currently unavailable.\n\n' +
+          'Please check:\n' +
+          '• Location is enabled: Settings → Location → ON\n' +
+          '• App has permission: Settings → Apps → Permissions\n\n' +
+          'Or manually enter your address below.';
+      } else {
+        errorMessage = 'Could not determine your location.\n\n' +
+          'Are you using an emulator? Emulators often have issues with GPS.\n\n' +
+          'Solution: Manually enter your business address in the fields below.';
+      }
+
+      Alert.alert(errorTitle, errorMessage, [
+        { text: 'OK', style: 'default' }
+      ]);
     } finally {
       setGettingLocation(false);
     }
@@ -246,8 +411,8 @@ export const RegisterBusinessScreen = () => {
       return;
     }
 
-    if (!location) {
-      Alert.alert('Required', 'Please set your business location');
+    if (!location && !address.trim()) {
+      Alert.alert('Required', 'Please set your business location or enter address manually');
       return;
     }
 
@@ -308,31 +473,36 @@ export const RegisterBusinessScreen = () => {
         coverImageUrl = await uploadImage(coverImage, 'cover.jpg');
       }
 
+      // Prepare business data
+      const businessData: any = {
+        name: businessName,
+        description,
+        logo_url: logoUrl,
+        image_url: coverImageUrl,
+        email,
+        owner_name: ownerName,
+        phone: contactNumber,
+        category,
+        website_name: websiteName,
+        website_url: websiteUrl,
+        working_hours: workingHours,
+        is_registered: registrationType === 'registered',
+        registration_number: registrationType === 'registered' ? brNumber : nicNumber,
+        owner_id: user.id,
+        address,
+        detailed_address: detailedAddress,
+        status: 'pending'
+      };
+
+      // Add location data if available
+      if (location) {
+        businessData.location = `POINT(${location.lng} ${location.lat})`;
+        businessData.latitude = location.lat;
+        businessData.longitude = location.lng;
+      }
+
       // Insert business
-      const { error: insertError } = await supabase.from('businesses').insert([
-        {
-          name: businessName,
-          description,
-          logo_url: logoUrl,
-          image_url: coverImageUrl,
-          email,
-          owner_name: ownerName,
-          phone: contactNumber,
-          category,
-          website_name: websiteName,
-          website_url: websiteUrl,
-          working_hours: workingHours,
-          is_registered: registrationType === 'registered',
-          registration_number: registrationType === 'registered' ? brNumber : nicNumber,
-          owner_id: user.id,
-          location: `POINT(${location.lng} ${location.lat})`,
-          address,
-          detailed_address: detailedAddress,
-          latitude: location.lat,
-          longitude: location.lng,
-          status: 'pending'
-        },
-      ]);
+      const { error: insertError } = await supabase.from('businesses').insert([businessData]);
 
       if (insertError) throw insertError;
 
@@ -600,8 +770,11 @@ export const RegisterBusinessScreen = () => {
 
             {/* Location */}
             <View style={{ marginBottom: 32 }}>
-              <Text style={{ fontSize: 18, fontWeight: 'bold', color: colors.text.primary, marginBottom: 16, fontFamily: 'Outfit' }}>
+              <Text style={{ fontSize: 18, fontWeight: 'bold', color: colors.text.primary, marginBottom: 8, fontFamily: 'Outfit' }}>
                 Location <Text style={{ color: colors.error }}>*</Text>
+              </Text>
+              <Text style={{ color: colors.text.tertiary, marginBottom: 16, fontFamily: 'Outfit', fontSize: 13 }}>
+                Click the button to auto-detect or type manually below
               </Text>
 
               <TouchableOpacity
@@ -630,52 +803,71 @@ export const RegisterBusinessScreen = () => {
               </TouchableOpacity>
 
               {location && (
-                <>
-                  <View style={{ marginBottom: 16 }}>
-                    <Text style={{ color: colors.text.secondary, marginBottom: 8, fontFamily: 'Outfit', fontSize: 14 }}>
-                      Address
-                    </Text>
-                    <TextInput
-                      value={address}
-                      onChangeText={setAddress}
-                      placeholder="Short address"
-                      placeholderTextColor={colors.input.placeholder}
-                      style={{
-                        backgroundColor: colors.input.background,
-                        padding: 14,
-                        borderRadius: 12,
-                        color: colors.input.text,
-                        borderWidth: 1,
-                        borderColor: colors.input.border,
-                        fontFamily: 'Outfit'
-                      }}
-                    />
-                  </View>
+                <View style={{ backgroundColor: colors.success + '15', padding: 12, borderRadius: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center' }}>
+                  <CheckCircle size={20} color={colors.success} />
+                  <Text style={{ color: colors.success, marginLeft: 8, fontFamily: 'Outfit', fontSize: 12, flex: 1 }}>
+                    Location captured: {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
+                  </Text>
+                </View>
+              )}
 
-                  <View style={{ marginBottom: 16 }}>
-                    <Text style={{ color: colors.text.secondary, marginBottom: 8, fontFamily: 'Outfit', fontSize: 14 }}>
-                      Detailed Address
-                    </Text>
-                    <TextInput
-                      value={detailedAddress}
-                      onChangeText={setDetailedAddress}
-                      placeholder="Full address with district, province"
-                      placeholderTextColor={colors.input.placeholder}
-                      multiline
-                      numberOfLines={2}
-                      style={{
-                        backgroundColor: colors.input.background,
-                        padding: 14,
-                        borderRadius: 12,
-                        color: colors.input.text,
-                        borderWidth: 1,
-                        borderColor: colors.input.border,
-                        fontFamily: 'Outfit',
-                        textAlignVertical: 'top'
-                      }}
-                    />
-                  </View>
-                </>
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ color: colors.text.secondary, marginBottom: 8, fontFamily: 'Outfit', fontSize: 14 }}>
+                  Address {location ? '' : <Text style={{ color: colors.error }}>*</Text>}
+                </Text>
+                <TextInput
+                  value={address}
+                  onChangeText={(text) => {
+                    setAddress(text);
+                    // If user manually enters address, try to geocode it
+                    if (text.length > 10 && !location) {
+                      // User is typing manually, this is okay
+                    }
+                  }}
+                  placeholder="e.g., 123 Galle Road, Colombo"
+                  placeholderTextColor={colors.input.placeholder}
+                  style={{
+                    backgroundColor: colors.input.background,
+                    padding: 14,
+                    borderRadius: 12,
+                    color: colors.input.text,
+                    borderWidth: 1,
+                    borderColor: colors.input.border,
+                    fontFamily: 'Outfit'
+                  }}
+                />
+              </View>
+
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ color: colors.text.secondary, marginBottom: 8, fontFamily: 'Outfit', fontSize: 14 }}>
+                  Detailed Address
+                </Text>
+                <TextInput
+                  value={detailedAddress}
+                  onChangeText={setDetailedAddress}
+                  placeholder="Full address with district, province"
+                  placeholderTextColor={colors.input.placeholder}
+                  multiline
+                  numberOfLines={2}
+                  style={{
+                    backgroundColor: colors.input.background,
+                    padding: 14,
+                    borderRadius: 12,
+                    color: colors.input.text,
+                    borderWidth: 1,
+                    borderColor: colors.input.border,
+                    fontFamily: 'Outfit',
+                    textAlignVertical: 'top'
+                  }}
+                />
+              </View>
+
+              {!location && (
+                <View style={{ backgroundColor: colors.brand.blue + '10', padding: 12, borderRadius: 12, marginTop: 8 }}>
+                  <Text style={{ color: colors.text.tertiary, fontSize: 12, fontFamily: 'Outfit' }}>
+                    💡 Tip: Click "Get Current Location" button or enter your business address manually above. Location coordinates help customers find you on the map.
+                  </Text>
+                </View>
               )}
             </View>
 

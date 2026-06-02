@@ -19,6 +19,10 @@
     },
     "android": {
       "package": "com.laxsan.slbusinessapp",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ],
       "intentFilters": [
         {
           "action": "VIEW",
@@ -43,7 +47,15 @@
     },
     "plugins": [
       "expo-font",
-      "expo-location",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to access your location to set your business address on the map.",
+          "locationWhenInUsePermission": "Allow $(PRODUCT_NAME) to access your location to set your business address on the map.",
+          "isAndroidBackgroundLocationEnabled": false,
+          "isIosBackgroundLocationEnabled": false
+        }
+      ],
       [
         "expo-image-picker",
         {
