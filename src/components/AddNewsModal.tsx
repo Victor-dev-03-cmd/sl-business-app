@@ -6,15 +6,22 @@ import {
   ScrollView,
   TextInput,
   TouchableOpacity,
+  Image,
   Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { X, Plus, AlertCircle, CheckCircle } from 'lucide-react-native';
+import { X, Plus, AlertCircle, CheckCircle, ImageIcon, Trash2 } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../context/ThemeContext';
 import { Colors } from '../theme/colors';
+
+interface ImageAsset {
+  uri: string;
+  mimeType: string;
+}
 
 interface UserBusiness {
   id: string;
@@ -53,6 +60,7 @@ export const AddNewsModal: React.FC<AddNewsModalProps> = ({ visible, onClose, on
   const [userBusinesses, setUserBusinesses] = useState<UserBusiness[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Form state
   const [selectedBusinessId, setSelectedBusinessId] = useState('');
@@ -63,11 +71,84 @@ export const AddNewsModal: React.FC<AddNewsModalProps> = ({ visible, onClose, on
   const [district, setDistrict] = useState('Colombo');
   const [postType, setPostType] = useState<'hiring' | 'looking'>('hiring');
 
+  // Image state — max 5, same as web
+  const [selectedImages, setSelectedImages] = useState<ImageAsset[]>([]);
+
   useEffect(() => {
     if (visible) {
       fetchUserBusinesses();
+      // Reset images whenever modal opens
+      setSelectedImages([]);
+      setUploadProgress(0);
     }
   }, [visible]);
+
+  const pickImages = async () => {
+    if (selectedImages.length >= 5) {
+      Alert.alert('Maximum reached', 'You can upload up to 5 images.');
+      return;
+    }
+
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow access to your photos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      selectionLimit: 5 - selectedImages.length,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets.length > 0) {
+      const incoming = result.assets.map(a => ({
+        uri: a.uri,
+        mimeType: a.mimeType ?? 'image/jpeg',
+      }));
+      setSelectedImages(prev => [...prev, ...incoming].slice(0, 5));
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setSelectedImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const uploadNewsImages = async (userId: string): Promise<string[]> => {
+    const uploadedUrls: string[] = [];
+    let progress = 0;
+
+    for (const img of selectedImages) {
+      const ext = img.mimeType.split('/')[1] ?? img.uri.split('.').pop() ?? 'jpg';
+      // Same path structure as web: posts/{userId}/{timestamp}-{random}.{ext}
+      const fileName = `${userId}/${Date.now()}-${Math.random().toString(36).substring(2)}.${ext}`;
+      const filePath = `posts/${fileName}`;
+
+      const formData = new FormData();
+      formData.append('file', {
+        uri: img.uri,
+        name: `image.${ext}`,
+        type: img.mimeType,
+      } as any);
+
+      const { error: uploadError } = await supabase.storage
+        .from('news-images')
+        .upload(filePath, formData, { contentType: img.mimeType, upsert: false });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('news-images')
+        .getPublicUrl(filePath);
+
+      uploadedUrls.push(publicUrl);
+      progress += 100 / selectedImages.length;
+      setUploadProgress(Math.min(Math.round(progress), 100));
+    }
+
+    return uploadedUrls;
+  };
 
   const fetchUserBusinesses = async () => {
     try {
@@ -115,9 +196,16 @@ export const AddNewsModal: React.FC<AddNewsModalProps> = ({ visible, onClose, on
 
     try {
       setSubmitting(true);
+      setUploadProgress(0);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
+      // 1. Upload images first (same as web)
+      const uploadedUrls = selectedImages.length > 0
+        ? await uploadNewsImages(user.id)
+        : [];
+
+      // 2. Insert post with image URLs
       const { error } = await supabase
         .from('business_news')
         .insert({
@@ -129,7 +217,7 @@ export const AddNewsModal: React.FC<AddNewsModalProps> = ({ visible, onClose, on
           category,
           district,
           post_type: postType,
-          images: [],
+          images: uploadedUrls,
         });
 
       if (error) throw error;
@@ -141,6 +229,8 @@ export const AddNewsModal: React.FC<AddNewsModalProps> = ({ visible, onClose, on
       setCategory(MAIN_CATEGORY_GROUPS[0]);
       setDistrict('Colombo');
       setPostType('hiring');
+      setSelectedImages([]);
+      setUploadProgress(0);
 
       Alert.alert(
         'Success',
@@ -328,6 +418,68 @@ export const AddNewsModal: React.FC<AddNewsModalProps> = ({ visible, onClose, on
               </Text>
             </View>
 
+            {/* Photos — up to 5, same as web */}
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ fontSize: 11, fontFamily: 'Outfit', textTransform: 'uppercase', letterSpacing: 1, color: colors.text.tertiary, marginBottom: 10 }}>
+                Photos (up to 5) — Optional
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                {/* Previews */}
+                {selectedImages.map((img, idx) => (
+                  <View
+                    key={idx}
+                    style={{
+                      width: 80, height: 80, borderRadius: 12,
+                      overflow: 'hidden', backgroundColor: colors.input.background,
+                      borderWidth: 1, borderColor: colors.border,
+                    }}
+                  >
+                    <Image
+                      source={{ uri: img.uri }}
+                      style={{ width: '100%', height: '100%' }}
+                      resizeMode="cover"
+                    />
+                    {/* Delete button */}
+                    <TouchableOpacity
+                      onPress={() => removeImage(idx)}
+                      style={{
+                        position: 'absolute', top: 4, right: 4,
+                        width: 22, height: 22, borderRadius: 11,
+                        backgroundColor: 'rgba(0,0,0,0.55)',
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <Trash2 size={12} color="#ffffff" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+
+                {/* Add button — hidden when 5 images selected */}
+                {selectedImages.length < 5 && (
+                  <TouchableOpacity
+                    onPress={pickImages}
+                    style={{
+                      width: 80, height: 80, borderRadius: 12,
+                      borderWidth: 2, borderStyle: 'dashed',
+                      borderColor: colors.border, backgroundColor: colors.input.background,
+                      alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <ImageIcon size={22} color={colors.text.tertiary} />
+                    <Text style={{ fontFamily: 'Outfit', fontSize: 10, fontWeight: '700', color: colors.text.tertiary, marginTop: 4, textTransform: 'uppercase' }}>
+                      Add
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {selectedImages.length > 0 && (
+                <Text style={{ fontFamily: 'Outfit', fontSize: 11, color: colors.text.tertiary, marginTop: 6 }}>
+                  {selectedImages.length}/5 photo{selectedImages.length !== 1 ? 's' : ''} selected
+                </Text>
+              )}
+            </View>
+
             {/* Contact Phone */}
             <View className="mb-4">
               <Text className="text-xs font-outfit mb-2 uppercase tracking-wide" style={{ color: colors.text.tertiary }}>
@@ -412,6 +564,23 @@ export const AddNewsModal: React.FC<AddNewsModalProps> = ({ visible, onClose, on
               </Text>
             </View>
 
+            {/* Upload progress bar — visible only while uploading images */}
+            {submitting && selectedImages.length > 0 && uploadProgress < 100 && (
+              <View style={{ marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ fontFamily: 'Outfit', fontSize: 12, color: colors.text.secondary }}>
+                    Uploading photos…
+                  </Text>
+                  <Text style={{ fontFamily: 'Outfit', fontSize: 12, color: colors.brand.blue }}>
+                    {uploadProgress}%
+                  </Text>
+                </View>
+                <View style={{ height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                  <View style={{ height: '100%', width: `${uploadProgress}%`, backgroundColor: colors.brand.blue, borderRadius: 3 }} />
+                </View>
+              </View>
+            )}
+
             {/* Submit Button */}
             <TouchableOpacity
               onPress={handleSubmit}
@@ -424,7 +593,9 @@ export const AddNewsModal: React.FC<AddNewsModalProps> = ({ visible, onClose, on
               {submitting ? (
                 <>
                   <ActivityIndicator size="small" color="#ffffff" />
-                  <Text className="text-white font-outfit font-bold ml-2">Submitting...</Text>
+                  <Text className="text-white font-outfit font-bold ml-2">
+                    {selectedImages.length > 0 && uploadProgress < 100 ? 'Uploading...' : 'Submitting...'}
+                  </Text>
                 </>
               ) : (
                 <>

@@ -424,25 +424,41 @@ export const BusinessDetailsScreen = () => {
   };
 
   const handleDirections = () => {
-    if (!business?.latitude || !business?.longitude) {
-      Alert.alert('No Location', 'Location not available');
+    if (!business) return;
+
+    const hasCoords = !!(business.latitude && business.longitude);
+    const addressText = business.detailed_address || business.address;
+
+    if (!hasCoords && !addressText) {
+      Alert.alert('No Location', 'This business has not provided a location or address yet.');
       return;
     }
 
-    const scheme = Platform.select({
-      ios: 'maps:0,0?q=',
-      android: 'geo:0,0?q='
-    });
-    const latLng = `${business.latitude},${business.longitude}`;
-    const label = business.name;
-    const url = Platform.select({
-      ios: `${scheme}${label}@${latLng}`,
-      android: `${scheme}${latLng}(${label})`
-    });
+    let url: string;
 
-    if (url) {
-      Linking.openURL(url);
+    if (hasCoords) {
+      // Precise coords — open native maps app
+      const latLng = `${business.latitude},${business.longitude}`;
+      const label = encodeURIComponent(business.name);
+      url = Platform.select({
+        ios: `maps:0,0?q=${label}@${latLng}`,
+        android: `geo:0,0?q=${latLng}(${label})`,
+      }) ?? `https://www.google.com/maps/search/?api=1&query=${latLng}`;
+    } else {
+      // No coords — fall back to Google Maps text search using the address
+      const query = encodeURIComponent(`${business.name} ${addressText}`);
+      url = `https://www.google.com/maps/search/?api=1&query=${query}`;
     }
+
+    Linking.openURL(url).catch(() => {
+      // If native maps fails, fall back to Google Maps web URL
+      const query = encodeURIComponent(
+        hasCoords
+          ? `${business.latitude},${business.longitude}`
+          : `${business.name} ${addressText}`
+      );
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
+    });
   };
 
   const handleShare = async () => {
@@ -655,7 +671,7 @@ export const BusinessDetailsScreen = () => {
           </View>
 
           {/* Location */}
-          {!!(business.detailed_address || business.address) && (
+          {!!(business.detailed_address || business.address || business.latitude) && (
             <View style={{ marginBottom: 24 }}>
               <Text style={{ fontSize: 18, fontWeight: 'bold', color: colors.text.primary, marginBottom: 12, fontFamily: 'Outfit' }}>Location</Text>
               <TouchableOpacity
@@ -669,9 +685,16 @@ export const BusinessDetailsScreen = () => {
                   <Text style={{ color: colors.text.primary, fontWeight: 'bold', fontFamily: 'Outfit', marginBottom: 4 }}>
                     {business.city || 'Address'}
                   </Text>
-                  <Text style={{ color: colors.text.secondary, fontSize: 14, fontFamily: 'Outfit' }}>
-                    {business.detailed_address || business.address}
-                  </Text>
+                  {!!(business.detailed_address || business.address) && (
+                    <Text style={{ color: colors.text.secondary, fontSize: 14, fontFamily: 'Outfit' }}>
+                      {business.detailed_address || business.address}
+                    </Text>
+                  )}
+                  {!business.latitude && (
+                    <Text style={{ color: colors.text.tertiary, fontSize: 11, fontFamily: 'Outfit', marginTop: 4 }}>
+                      Opens Google Maps search
+                    </Text>
+                  )}
                 </View>
                 <Navigation size={20} color={colors.brand.blue} />
               </TouchableOpacity>

@@ -51,7 +51,8 @@ export const NotificationsScreen = () => {
   useEffect(() => {
     if (userId) {
       fetchNotifications();
-      setupRealtimeSubscription();
+      const cleanup = setupRealtimeSubscription();
+      return cleanup;
     }
   }, [userId]);
 
@@ -95,7 +96,7 @@ export const NotificationsScreen = () => {
     if (!userId) return;
 
     const channel = supabase
-      .channel('realtime_notifications')
+      .channel(`realtime_notifications_${userId}`)
       .on(
         'postgres_changes',
         {

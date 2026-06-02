@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Image, Switch, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LogOut, User, Settings, Bell, Shield, HelpCircle, ChevronRight, Globe, LayoutDashboard, Moon, Sun, Monitor } from 'lucide-react-native';
+import { LogOut, User, Settings, Bell, Shield, HelpCircle, ChevronRight, Globe, LayoutDashboard, Moon, Sun, Monitor, ShieldCheck } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { useTheme } from '../../context/ThemeContext';
@@ -17,6 +17,8 @@ export const SettingsScreen = ({ session }: { session: Session | null }) => {
   const navigation = useNavigation<any>();
   const [role, setRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isVendor, setIsVendor] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<string>('none');
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [currentLanguage, setCurrentLanguage] = useState('English');
   const { theme, themeMode, setThemeMode, isDark } = useTheme();
@@ -53,14 +55,24 @@ export const SettingsScreen = ({ session }: { session: Session | null }) => {
 
   const fetchUserRole = async () => {
     try {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('profiles')
         .select('role')
         .eq('id', session?.user.id)
         .single();
 
-      if (data) {
-        setRole(data.role);
+      if (data) setRole(data.role);
+
+      // Check if user owns any businesses → vendor
+      const { data: bizData } = await supabase
+        .from('businesses')
+        .select('id, verification_status')
+        .eq('owner_id', session?.user.id)
+        .limit(1);
+
+      if (bizData && bizData.length > 0) {
+        setIsVendor(true);
+        setVerificationStatus(bizData[0].verification_status ?? 'none');
       }
     } catch (error) {
       console.error('Error fetching role:', error);
@@ -242,6 +254,27 @@ export const SettingsScreen = ({ session }: { session: Session | null }) => {
                <ChevronRight size={16} color={colors.text.tertiary} />
              </View>
            </TouchableOpacity>
+
+           {/* Business Verification — only for vendors */}
+           {isVendor && (
+             <TouchableOpacity
+               onPress={() => navigation.navigate('VendorVerification' as never)}
+               className="flex-row items-center justify-between mb-8"
+             >
+               <View className="flex-row items-center">
+                 <View className="p-3 rounded-2xl mr-4" style={{ backgroundColor: verificationStatus === 'approved' ? '#10b98120' : verificationStatus === 'pending' ? '#f59e0b20' : colors.brand.blue + '20' }}>
+                   <ShieldCheck size={20} color={verificationStatus === 'approved' ? '#10b981' : verificationStatus === 'pending' ? '#f59e0b' : colors.brand.blue} />
+                 </View>
+                 <View>
+                   <Text className="font-bold font-outfit" style={{ color: colors.text.primary }}>Business Verification</Text>
+                   <Text className="text-[10px] font-outfit" style={{ color: colors.text.tertiary }}>
+                     {verificationStatus === 'approved' ? 'Verified ✓' : verificationStatus === 'pending' ? 'Under review…' : 'Get your business verified'}
+                   </Text>
+                 </View>
+               </View>
+               <ChevronRight size={16} color={colors.text.tertiary} />
+             </TouchableOpacity>
+           )}
 
            {/* Privacy & Security */}
            <TouchableOpacity

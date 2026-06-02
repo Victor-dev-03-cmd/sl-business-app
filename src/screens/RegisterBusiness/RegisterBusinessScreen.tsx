@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
   ScrollView,
+  FlatList,
+  Modal,
   TextInput,
   TouchableOpacity,
   Image,
@@ -15,8 +17,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   Building2,
   MapPin,
-  Phone,
-  Mail,
   Globe,
   Clock,
   Upload,
@@ -24,7 +24,11 @@ import {
   AlertCircle,
   ChevronDown,
   Camera,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Search,
+  X,
+  Check,
+  TriangleAlert,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -43,6 +47,7 @@ export const RegisterBusinessScreen = () => {
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('');
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  const [categorySearch, setCategorySearch] = useState('');
   const [ownerName, setOwnerName] = useState('');
   const [email, setEmail] = useState('');
   const [contactNumber, setContactNumber] = useState('');
@@ -59,15 +64,16 @@ export const RegisterBusinessScreen = () => {
   const [nicNumber, setNicNumber] = useState('');
 
   // Images
-  const [logo, setLogo] = useState<string | null>(null);
-  const [coverImage, setCoverImage] = useState<string | null>(null);
+  const [logo, setLogo] = useState<{ uri: string; mimeType?: string | null } | null>(null);
+  const [coverImage, setCoverImage] = useState<{ uri: string; mimeType?: string | null } | null>(null);
 
   // UI states
   const [loading, setLoading] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [gettingLocation, setGettingLocation] = useState(false);
   const [user, setUser] = useState<any>(null);
-  const [existingBusiness, setExistingBusiness] = useState<any>(null);
+  const [existingBusiness, setExistingBusiness] = useState<{ id: string; status: string; name: string } | null>(null);
   const [categories, setCategories] = useState<string[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(true);
 
@@ -364,10 +370,12 @@ export const RegisterBusinessScreen = () => {
       });
 
       if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        const file = { uri: asset.uri, mimeType: asset.mimeType ?? 'image/jpeg' };
         if (type === 'logo') {
-          setLogo(result.assets[0].uri);
+          setLogo(file);
         } else {
-          setCoverImage(result.assets[0].uri);
+          setCoverImage(file);
         }
       }
     } catch (error) {
@@ -376,140 +384,139 @@ export const RegisterBusinessScreen = () => {
     }
   };
 
-  const uploadImage = async (uri: string, fileName: string) => {
-    try {
-      const response = await fetch(uri);
-      const blob = await response.blob();
+  const uploadImage = async (
+    file: { uri: string; mimeType?: string | null },
+    fileName: string,
+    ownerId: string,
+  ) => {
+    // Derive extension: prefer mimeType, fall back to the URI filename extension
+    const extFromMime = file.mimeType ? file.mimeType.split('/')[1] : null;
+    const extFromUri = file.uri.split('.').pop()?.replace(/[^a-z0-9]/gi, '') ?? 'jpg';
+    const ext = extFromMime ?? extFromUri ?? 'jpg';
+    const mime = file.mimeType ?? `image/${ext}`;
 
-      const filePath = `${user.id}/${Date.now()}_${fileName}`;
-      const { error: uploadError } = await supabase.storage
-        .from('business-logos')
-        .upload(filePath, blob);
+    const filePath = `${ownerId}/${Date.now()}_${fileName}.${ext}`;
 
-      if (uploadError) throw uploadError;
+    const formData = new FormData();
+    formData.append('file', {
+      uri: file.uri,
+      name: `${fileName}.${ext}`,
+      type: mime,
+    } as any);
 
-      const { data: urlData } = supabase.storage
-        .from('business-logos')
-        .getPublicUrl(filePath);
+    const { error: uploadError } = await supabase.storage
+      .from('business-logos')
+      .upload(filePath, formData, { contentType: mime, upsert: false });
 
-      return urlData.publicUrl;
-    } catch (error) {
-      console.error('Error uploading image:', error);
-      throw error;
-    }
+    if (uploadError) throw uploadError;
+
+    const { data: urlData } = supabase.storage
+      .from('business-logos')
+      .getPublicUrl(filePath);
+
+    return urlData.publicUrl;
   };
 
   const handleSubmit = async () => {
-    // Validation
+    setSubmitError(null);
+
+    // Validation — same order and messages as the web form
     if (!businessName.trim()) {
-      Alert.alert('Required', 'Business Name is required');
+      setSubmitError('Business Name is required.');
       return;
     }
-
     if (!category) {
-      Alert.alert('Required', 'Please select a category');
+      setSubmitError('Please select a category for your business.');
       return;
     }
-
     if (!location && !address.trim()) {
-      Alert.alert('Required', 'Please set your business location or enter address manually');
+      setSubmitError('Please select a valid business address.');
       return;
     }
-
     if (!ownerName.trim()) {
-      Alert.alert('Required', 'Owner Name is required');
+      setSubmitError('Owner Name is required.');
       return;
     }
-
     if (!contactNumber.trim()) {
-      Alert.alert('Required', 'Contact Number is required');
+      setSubmitError('Contact Number is required.');
       return;
     }
-
     if (!email.trim()) {
-      Alert.alert('Required', 'Business Email is required');
+      setSubmitError('Business Email is required.');
       return;
     }
-
     if (registrationType === 'registered') {
       if (!brNumber.trim()) {
-        Alert.alert('Required', 'BR Number is required for registered companies');
+        setSubmitError('BR Number is required for registered companies.');
         return;
       }
       if (!validateBR(brNumber)) {
-        Alert.alert('Invalid', 'Invalid BR Number format (e.g., PV 1234, WP/1234)');
+        setSubmitError('Invalid BR Number format. (e.g., PV 1234, WP/1234)');
+        return;
+      }
+    }
+    if (registrationType === 'unregistered') {
+      if (!nicNumber.trim()) {
+        setSubmitError('NIC or Passport Number is required.');
+        return;
+      }
+      if (!validateNIC(nicNumber)) {
+        setSubmitError('Invalid Sri Lankan NIC format.');
         return;
       }
     }
 
-    if (registrationType === 'unregistered') {
-      if (!nicNumber.trim()) {
-        Alert.alert('Required', 'NIC Number is required');
-        return;
-      }
-      if (!validateNIC(nicNumber)) {
-        Alert.alert('Invalid', 'Invalid Sri Lankan NIC format');
-        return;
-      }
+    if (!user) {
+      setSubmitError('You must be logged in to register a business.');
+      return;
     }
 
     try {
       setLoading(true);
 
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        Alert.alert('Error', 'You must be logged in to register a business');
-        return;
-      }
-
-      // Upload images
-      let logoUrl = null;
+      // Upload logo
+      let logoUrl: string | null = null;
       if (logo) {
-        logoUrl = await uploadImage(logo, 'logo.jpg');
+        logoUrl = await uploadImage(logo, 'logo', user.id);
       }
 
-      let coverImageUrl = null;
+      // Upload cover/hover image — same bucket as web ('business-logos')
+      let hoverImageUrl: string | null = null;
       if (coverImage) {
-        coverImageUrl = await uploadImage(coverImage, 'cover.jpg');
+        hoverImageUrl = await uploadImage(coverImage, 'hover', user.id);
       }
 
-      // Prepare business data
-      const businessData: any = {
-        name: businessName,
-        description,
+      // Insert payload — exactly mirrors the web form insert
+      const { error: insertError } = await supabase.from('businesses').insert([{
+        name: businessName.trim(),
+        description: description.trim() || null,
         logo_url: logoUrl,
-        image_url: coverImageUrl,
-        email,
-        owner_name: ownerName,
-        phone: contactNumber,
+        image_url: hoverImageUrl,
+        email: email.trim(),
+        owner_name: ownerName.trim(),
+        phone: contactNumber.trim(),
         category,
-        website_name: websiteName,
-        website_url: websiteUrl,
-        working_hours: workingHours,
+        website_name: websiteName.trim() || null,
+        website_url: websiteUrl.trim() || null,
+        working_hours: workingHours.trim() || null,
         is_registered: registrationType === 'registered',
-        registration_number: registrationType === 'registered' ? brNumber : nicNumber,
+        registration_number: registrationType === 'registered' ? brNumber.trim() : nicNumber.trim(),
         owner_id: user.id,
-        address,
-        detailed_address: detailedAddress,
-        status: 'pending'
-      };
-
-      // Add location data if available
-      if (location) {
-        businessData.location = `POINT(${location.lng} ${location.lat})`;
-        businessData.latitude = location.lat;
-        businessData.longitude = location.lng;
-      }
-
-      // Insert business
-      const { error: insertError } = await supabase.from('businesses').insert([businessData]);
+        // Geography point — same WKT format as web
+        location: location ? `POINT(${location.lng} ${location.lat})` : null,
+        address: address.trim() || null,
+        detailed_address: detailedAddress.trim() || null,
+        latitude: location?.lat ?? null,
+        longitude: location?.lng ?? null,
+        status: 'pending',   // always starts pending, admin approves
+      }]);
 
       if (insertError) throw insertError;
 
       setIsSubmitted(true);
     } catch (error: any) {
       console.error('Error submitting business:', error);
-      Alert.alert('Error', error.message || 'Failed to submit business');
+      setSubmitError(error.message || 'Failed to submit business. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -537,20 +544,31 @@ export const RegisterBusinessScreen = () => {
     );
   }
 
-  if (existingBusiness && !isSubmitted) {
+  // Mirror web: block re-submission only when status is pending or approved
+  if (existingBusiness && (existingBusiness.status === 'pending' || existingBusiness.status === 'approved') && !isSubmitted) {
+    const isPending = existingBusiness.status === 'pending';
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['top']}>
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
-          <CheckCircle size={48} color={colors.success} />
-          <Text style={{ fontSize: 18, fontWeight: 'bold', color: colors.text.primary, marginTop: 16, fontFamily: 'Outfit' }}>
-            Business Already Registered
+          {isPending
+            ? <Clock size={64} color="#f59e0b" />
+            : <CheckCircle size={64} color={colors.success} />
+          }
+          <Text style={{ fontSize: 22, fontWeight: 'bold', color: colors.text.primary, marginTop: 24, textAlign: 'center', fontFamily: 'Outfit' }}>
+            {isPending ? 'Application Pending' : 'Business Already Approved'}
           </Text>
-          <Text style={{ color: colors.text.secondary, marginTop: 8, textAlign: 'center', fontFamily: 'Outfit' }}>
-            {existingBusiness.name}
+          <Text style={{ color: colors.text.secondary, marginTop: 12, textAlign: 'center', fontFamily: 'Outfit', lineHeight: 22 }}>
+            {isPending
+              ? `We've already received your application for "${existingBusiness.name}". It's currently being reviewed.`
+              : `Your business "${existingBusiness.name}" is already active in our directory.`
+            }
           </Text>
-          <Text style={{ color: colors.text.tertiary, marginTop: 4, textAlign: 'center', fontFamily: 'Outfit', fontSize: 12 }}>
-            Status: {existingBusiness.status}
-          </Text>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('Home' as never)}
+            style={{ marginTop: 32, backgroundColor: colors.brand.blue, paddingHorizontal: 32, paddingVertical: 14, borderRadius: 12 }}
+          >
+            <Text style={{ color: 'white', fontWeight: 'bold', fontFamily: 'Outfit' }}>Go to Home</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
@@ -655,7 +673,7 @@ export const RegisterBusinessScreen = () => {
                   Category <Text style={{ color: colors.error }}>*</Text>
                 </Text>
                 <TouchableOpacity
-                  onPress={() => setShowCategoryPicker(true)}
+                  onPress={() => { setCategorySearch(''); setShowCategoryPicker(true); }}
                   style={{
                     backgroundColor: colors.input.background,
                     padding: 14,
@@ -674,31 +692,105 @@ export const RegisterBusinessScreen = () => {
                 </TouchableOpacity>
               </View>
 
-              {showCategoryPicker && (
-                <View style={{ marginBottom: 16, backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: colors.border, maxHeight: 200 }}>
-                  <ScrollView>
-                    {categories.map((cat) => (
-                      <TouchableOpacity
-                        key={cat}
-                        onPress={() => {
-                          setCategory(cat);
-                          setShowCategoryPicker(false);
-                        }}
-                        style={{
-                          padding: 16,
-                          borderBottomWidth: 1,
-                          borderBottomColor: colors.border,
-                          backgroundColor: category === cat ? colors.brand.blue + '10' : 'transparent'
-                        }}
-                      >
-                        <Text style={{ color: category === cat ? colors.brand.blue : colors.text.primary, fontFamily: 'Outfit' }}>
-                          {cat}
-                        </Text>
+              {/* Category Picker Modal */}
+              <Modal
+                visible={showCategoryPicker}
+                animationType="slide"
+                presentationStyle="pageSheet"
+                onRequestClose={() => setShowCategoryPicker(false)}
+              >
+                <KeyboardAvoidingView
+                  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                  style={{ flex: 1, backgroundColor: colors.background }}
+                >
+                  {/* Modal Header */}
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                    paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12,
+                    borderBottomWidth: 1, borderBottomColor: colors.border,
+                  }}>
+                    <Text style={{ fontFamily: 'Outfit', fontSize: 18, color: colors.text.primary }}>
+                      Select Category
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setShowCategoryPicker(false)}
+                      style={{ padding: 6, borderRadius: 20, backgroundColor: colors.input.background }}
+                    >
+                      <X size={20} color={colors.text.primary} />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Search Input */}
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center',
+                    margin: 16, paddingHorizontal: 14, paddingVertical: 10,
+                    borderRadius: 12, borderWidth: 1,
+                    borderColor: colors.border, backgroundColor: colors.input.background,
+                  }}>
+                    <Search size={18} color={colors.text.tertiary} />
+                    <TextInput
+                      value={categorySearch}
+                      onChangeText={setCategorySearch}
+                      placeholder="Search categories…"
+                      placeholderTextColor={colors.text.tertiary}
+                      autoFocus
+                      style={{
+                        flex: 1, marginLeft: 10, fontFamily: 'Outfit',
+                        fontSize: 15, color: colors.text.primary,
+                      }}
+                    />
+                    {categorySearch.length > 0 && (
+                      <TouchableOpacity onPress={() => setCategorySearch('')}>
+                        <X size={16} color={colors.text.tertiary} />
                       </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
+                    )}
+                  </View>
+
+                  {/* Category List */}
+                  <FlatList
+                    data={categories.filter(cat =>
+                      cat.toLowerCase().includes(categorySearch.toLowerCase())
+                    )}
+                    keyExtractor={item => item}
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={{ paddingBottom: 40 }}
+                    renderItem={({ item: cat }) => {
+                      const selected = cat === category;
+                      return (
+                        <TouchableOpacity
+                          onPress={() => {
+                            setCategory(cat);
+                            setShowCategoryPicker(false);
+                          }}
+                          style={{
+                            flexDirection: 'row', alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingHorizontal: 20, paddingVertical: 16,
+                            borderBottomWidth: 1, borderBottomColor: colors.border,
+                            backgroundColor: selected ? colors.brand.blue + '10' : 'transparent',
+                          }}
+                        >
+                          <Text style={{
+                            fontFamily: 'Outfit', fontSize: 15,
+                            color: selected ? colors.brand.blue : colors.text.primary,
+                            fontWeight: selected ? '700' : '400',
+                          }}>
+                            {cat}
+                          </Text>
+                          {selected && <Check size={18} color={colors.brand.blue} />}
+                        </TouchableOpacity>
+                      );
+                    }}
+                    ListEmptyComponent={
+                      <View style={{ alignItems: 'center', paddingVertical: 48 }}>
+                        <Text style={{ fontFamily: 'Outfit', fontSize: 14, color: colors.text.tertiary }}>
+                          No categories match "{categorySearch}"
+                        </Text>
+                      </View>
+                    }
+                  />
+                </KeyboardAvoidingView>
+              </Modal>
             </View>
 
             {/* Images */}
@@ -727,7 +819,7 @@ export const RegisterBusinessScreen = () => {
                     }}
                   >
                     {logo ? (
-                      <Image source={{ uri: logo }} style={{ width: '100%', height: '100%', borderRadius: 10 }} resizeMode="cover" />
+                      <Image source={{ uri: logo.uri }} style={{ width: '100%', height: '100%', borderRadius: 10 }} resizeMode="cover" />
                     ) : (
                       <>
                         <Camera size={32} color={colors.text.tertiary} />
@@ -756,7 +848,7 @@ export const RegisterBusinessScreen = () => {
                     }}
                   >
                     {coverImage ? (
-                      <Image source={{ uri: coverImage }} style={{ width: '100%', height: '100%', borderRadius: 10 }} resizeMode="cover" />
+                      <Image source={{ uri: coverImage.uri }} style={{ width: '100%', height: '100%', borderRadius: 10 }} resizeMode="cover" />
                     ) : (
                       <>
                         <ImageIcon size={32} color={colors.text.tertiary} />
@@ -1104,6 +1196,20 @@ export const RegisterBusinessScreen = () => {
                 </View>
               )}
             </View>
+
+            {/* Inline error — mirrors web's red banner */}
+            {submitError && (
+              <View style={{
+                flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+                backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca',
+                borderRadius: 12, padding: 14, marginBottom: 20,
+              }}>
+                <TriangleAlert size={18} color="#ef4444" style={{ marginTop: 1 }} />
+                <Text style={{ flex: 1, color: '#dc2626', fontFamily: 'Outfit', fontSize: 14 }}>
+                  {submitError}
+                </Text>
+              </View>
+            )}
 
             {/* Submit Button */}
             <TouchableOpacity

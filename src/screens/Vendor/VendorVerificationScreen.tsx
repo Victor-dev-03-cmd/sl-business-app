@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,7 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
-  Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -17,14 +17,15 @@ import {
   CheckCircle,
   Clock,
   AlertTriangle,
-  FileText,
   Building2,
+  FileText,
+  RefreshCw,
 } from 'lucide-react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../theme/colors';
-import * as DocumentPicker from 'expo-document-picker';
 
 interface Business {
   id: string;
@@ -35,9 +36,8 @@ interface Business {
 
 interface Verification {
   id: string;
-  status: string;
+  status: 'pending' | 'approved' | 'rejected';
   br_document_url?: string;
-  nic_passport_url?: string;
   business_type?: string;
   br_number?: string;
   tin_number?: string;
@@ -57,18 +57,19 @@ export const VendorVerificationScreen = () => {
   const [selectedBusinessId, setSelectedBusinessId] = useState('');
   const [verification, setVerification] = useState<Verification | null>(null);
 
-  // Form state
+  // Form state — mirrors web page exactly
   const [businessType, setBusinessType] = useState<'pvt_ltd' | 'local_business'>('pvt_ltd');
   const [brNumber, setBrNumber] = useState('');
   const [tinNumber, setTinNumber] = useState('');
   const [svatNumber, setSvatNumber] = useState('');
-  const [documentUri, setDocumentUri] = useState<string | null>(null);
-  const [documentName, setDocumentName] = useState<string | null>(null);
-  const [documentFile, setDocumentFile] = useState<any>(null);
+  const [docUri, setDocUri] = useState<string | null>(null);
+  const [docMime, setDocMime] = useState<string>('image/jpeg');
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [])
+  );
 
   const fetchData = async () => {
     try {
@@ -76,522 +77,529 @@ export const VendorVerificationScreen = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Fetch user's businesses
-      const { data: businessData, error: bizError } = await supabase
+      const { data: bizData, error: bizErr } = await supabase
         .from('businesses')
         .select('id, name, is_verified, verification_status')
         .eq('owner_id', user.id);
 
-      if (bizError) throw bizError;
+      if (bizErr) throw bizErr;
 
-      if (businessData && businessData.length > 0) {
-        setBusinesses(businessData);
-        const firstBusiness = businessData[0];
-        setSelectedBusinessId(firstBusiness.id);
-
-        // Fetch verification for first business
-        await fetchVerification(firstBusiness.id);
+      if (bizData && bizData.length > 0) {
+        setBusinesses(bizData);
+        const first = bizData[0];
+        setSelectedBusinessId(first.id);
+        await loadVerification(first.id);
+      } else {
+        setBusinesses([]);
       }
-    } catch (error) {
-      console.error('Error fetching data:', error);
+    } catch (err) {
+      console.error('fetchData error:', err);
       Alert.alert('Error', 'Failed to load verification data');
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchVerification = async (businessId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('verifications')
-        .select('*')
-        .eq('business_id', businessId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+  const loadVerification = async (businessId: string) => {
+    const { data, error } = await supabase
+      .from('verifications')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-      if (error && error.code !== 'PGRST116') throw error;
-
-      if (data) {
-        setVerification(data);
-        setBusinessType(data.business_type || 'pvt_ltd');
-        setBrNumber(data.br_number || '');
-        setTinNumber(data.tin_number || '');
-        setSvatNumber(data.svat_number || '');
-      } else {
-        setVerification(null);
-        setBrNumber('');
-        setTinNumber('');
-        setSvatNumber('');
-      }
-    } catch (error) {
-      console.error('Error fetching verification:', error);
+    if (error && error.code !== 'PGRST116') {
+      console.error('loadVerification error:', error);
+      return;
     }
+
+    if (data) {
+      setVerification(data as Verification);
+      setBusinessType(data.business_type || 'pvt_ltd');
+      setBrNumber(data.br_number || '');
+      setTinNumber(data.tin_number || '');
+      setSvatNumber(data.svat_number || '');
+    } else {
+      setVerification(null);
+      setBusinessType('pvt_ltd');
+      setBrNumber('');
+      setTinNumber('');
+      setSvatNumber('');
+    }
+    // Clear any previously picked doc when switching businesses
+    setDocUri(null);
   };
 
-  const handleBusinessChange = async (businessId: string) => {
-    setSelectedBusinessId(businessId);
-    await fetchVerification(businessId);
+  const handleSelectBusiness = async (id: string) => {
+    setSelectedBusinessId(id);
+    await loadVerification(id);
   };
 
   const handlePickDocument = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
-      });
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow access to your photos to upload a document.');
+      return;
+    }
 
-      if (result.type === 'success' || !result.canceled) {
-        const file = result.assets ? result.assets[0] : result;
-        setDocumentUri(file.uri);
-        setDocumentName(file.name);
-        setDocumentFile(file);
-      }
-    } catch (error) {
-      console.error('Error picking document:', error);
-      Alert.alert('Error', 'Failed to pick document');
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      allowsEditing: false,
+    });
+
+    if (!result.canceled && result.assets.length > 0) {
+      const asset = result.assets[0];
+      setDocUri(asset.uri);
+      setDocMime(asset.mimeType ?? 'image/jpeg');
     }
   };
 
+  // Same BR-number regex as the web page
   const validateBRNumber = (): boolean => {
     const pvtRegex = /^PV\d{8}$/;
     const localRegex = /^\d+\/\d{4}\/\w+$/;
 
-    if (businessType === 'pvt_ltd' && !pvtRegex.test(brNumber)) {
-      Alert.alert('Invalid BR Number', 'Format should be: PV00212345');
+    if (businessType === 'pvt_ltd' && !pvtRegex.test(brNumber.trim())) {
+      Alert.alert('Invalid BR Number', 'Private Limited format: PV00212345');
       return false;
     }
-
-    if (businessType === 'local_business' && !localRegex.test(brNumber)) {
-      Alert.alert('Invalid BR Number', 'Format should be: [Number]/[Year]/[Code]\nExample: 123/2020/ABC');
+    if (businessType === 'local_business' && !localRegex.test(brNumber.trim())) {
+      Alert.alert('Invalid BR Number', 'Local Business format: Number/Year/Code\ne.g. 123/2020/ABC');
       return false;
     }
-
     return true;
   };
 
-  const handleSubmitVerification = async () => {
-    // Validation
-    if (!selectedBusinessId) {
-      Alert.alert('Error', 'Please select a business to verify');
+  const handleSubmit = async () => {
+    if (!docUri) {
+      Alert.alert('Document required', 'Please upload your BR certificate.');
       return;
     }
-
     if (!brNumber.trim()) {
-      Alert.alert('Error', 'Please enter your Business Registration Number');
+      Alert.alert('BR Number required', 'Please enter your Business Registration Number.');
       return;
     }
-
-    if (!validateBRNumber()) {
-      return;
-    }
-
-    if (!documentFile) {
-      Alert.alert('Error', 'Please upload your BR certificate or registration document');
-      return;
-    }
+    if (!validateBRNumber()) return;
 
     try {
       setSubmitting(true);
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) throw new Error('Not authenticated');
 
-      // Upload document to Supabase Storage
-      const fileExt = documentFile.name.split('.').pop();
-      const fileName = `${selectedBusinessId}-${user.id}-${Date.now()}.${fileExt}`;
+      // Upload image to verification-docs bucket — same bucket as web
+      const ext = docUri.split('.').pop() ?? 'jpg';
+      const fileName = `${selectedBusinessId}-${user.id}-${Date.now()}.${ext}`;
 
-      // For React Native, we need to create a File/Blob from the URI
-      const response = await fetch(documentFile.uri);
+      const response = await fetch(docUri);
       const blob = await response.blob();
 
-      const { error: uploadError } = await supabase.storage
+      const { error: uploadErr } = await supabase.storage
         .from('verification-docs')
-        .upload(fileName, blob, {
-          contentType: documentFile.mimeType || 'application/pdf',
-          upsert: false,
-        });
+        .upload(fileName, blob, { contentType: docMime, upsert: false });
 
-      if (uploadError) throw uploadError;
+      if (uploadErr) throw uploadErr;
 
-      // Get public URL
       const { data: { publicUrl } } = supabase.storage
         .from('verification-docs')
         .getPublicUrl(fileName);
 
-      // Insert verification record
-      const { error: verificationError } = await supabase
+      // Insert into verifications table — same columns as web
+      const { error: verErr } = await supabase
         .from('verifications')
         .insert({
           business_id: selectedBusinessId,
-          user_id: user.id,
+          status: 'pending',
+          br_document_url: publicUrl,
           business_type: businessType,
           br_number: brNumber.trim(),
           tin_number: tinNumber.trim() || null,
           svat_number: svatNumber.trim() || null,
-          br_document_url: publicUrl,
-          status: 'pending',
         });
 
-      if (verificationError) throw verificationError;
+      if (verErr) throw verErr;
 
-      // Update business verification status
+      // Also update profile verification_status — same as web
       await supabase
-        .from('businesses')
-        .update({ verification_status: 'pending' })
-        .eq('id', selectedBusinessId);
+        .from('profiles')
+        .update({ verification_status: 'pending', updated_at: new Date().toISOString() })
+        .eq('id', user.id);
 
       Alert.alert(
-        'Success',
-        'Verification submitted successfully! Our team will review your documents within 24-48 hours.',
-        [{ text: 'OK', onPress: () => fetchData() }]
+        'Submitted!',
+        'Your request is pending admin approval. We will notify you once reviewed.',
+        [{ text: 'OK', onPress: fetchData }]
       );
-
-      // Clear form
-      setDocumentUri(null);
-      setDocumentName(null);
-      setDocumentFile(null);
-    } catch (error: any) {
-      console.error('Error submitting verification:', error);
-      Alert.alert('Error', error.message || 'Failed to submit verification');
+      setDocUri(null);
+    } catch (err: any) {
+      console.error('handleSubmit error:', err);
+      Alert.alert('Error', err.message ?? 'Failed to submit verification');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const getStatusColor = (status?: string) => {
-    switch (status) {
-      case 'verified':
-      case 'approved':
-        return '#10b981';
-      case 'pending':
-        return '#f59e0b';
-      case 'rejected':
-        return '#ef4444';
-      default:
-        return colors.text.tertiary;
-    }
-  };
+  // ─── Derived state ────────────────────────────────────────────
+  const selectedBusiness = businesses.find(b => b.id === selectedBusinessId);
+  const displayStatus = verification?.status ?? selectedBusiness?.verification_status ?? 'none';
+  const isVerified = displayStatus === 'approved' || selectedBusiness?.is_verified === true;
+  const isPending = displayStatus === 'pending';
+  const isRejected = displayStatus === 'rejected';
+  const canEdit = !isVerified && !isPending;
 
-  const getStatusIcon = (status?: string) => {
-    switch (status) {
-      case 'verified':
-      case 'approved':
-        return CheckCircle;
-      case 'pending':
-        return Clock;
-      case 'rejected':
-        return AlertTriangle;
-      default:
-        return ShieldCheck;
-    }
+  const statusMeta = {
+    approved: { label: 'Verified', color: '#10b981', Icon: CheckCircle, bg: '#10b98115' },
+    pending:  { label: 'Under Review', color: '#f59e0b', Icon: Clock, bg: '#f59e0b15' },
+    rejected: { label: 'Rejected', color: '#ef4444', Icon: AlertTriangle, bg: '#ef444415' },
+    none:     { label: 'Not Submitted', color: colors.text.tertiary, Icon: ShieldCheck, bg: colors.input.background },
   };
+  const meta = statusMeta[displayStatus as keyof typeof statusMeta] ?? statusMeta.none;
 
+  // ─── Loading ──────────────────────────────────────────────────
   if (loading) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-        <View className="flex-1 items-center justify-center">
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator size="large" color={colors.brand.blue} />
-          <Text className="mt-4 text-base font-outfit" style={{ color: colors.text.secondary }}>
-            Loading verification status...
+          <Text style={{ marginTop: 16, color: colors.text.secondary, fontFamily: 'Outfit' }}>
+            Loading verification info…
           </Text>
         </View>
       </SafeAreaView>
     );
   }
 
+  // ─── No businesses ────────────────────────────────────────────
   if (businesses.length === 0) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-        <View className="px-6 py-4 border-b flex-row items-center" style={{ borderBottomColor: colors.border }}>
-          <TouchableOpacity onPress={() => navigation.goBack()} className="mr-4">
-            <ArrowLeft size={24} color={colors.text.primary} />
-          </TouchableOpacity>
-          <Text className="text-xl font-outfit" style={{ color: colors.text.primary }}>
-            Verification
-          </Text>
-        </View>
-        <View className="flex-1 items-center justify-center px-6">
+        <Header title="Business Verification" colors={colors} />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 }}>
           <Building2 size={64} color={colors.text.tertiary} />
-          <Text className="text-xl font-outfit mt-6 text-center" style={{ color: colors.text.primary }}>
+          <Text style={{ fontSize: 20, fontFamily: 'Outfit', marginTop: 24, color: colors.text.primary, textAlign: 'center' }}>
             No Businesses Found
           </Text>
-          <Text className="text-sm font-outfit mt-3 text-center" style={{ color: colors.text.secondary }}>
-            Please register a business first before applying for verification
+          <Text style={{ fontSize: 14, fontFamily: 'Outfit', marginTop: 8, color: colors.text.secondary, textAlign: 'center' }}>
+            Register a business first, then come back to get verified.
           </Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  const selectedBusiness = businesses.find(b => b.id === selectedBusinessId);
-  const isVerified = selectedBusiness?.is_verified || verification?.status === 'approved';
-  const isPending = verification?.status === 'pending';
-  const isRejected = verification?.status === 'rejected';
-  const StatusIcon = getStatusIcon(verification?.status || selectedBusiness?.verification_status);
-
+  // ─── Main UI ──────────────────────────────────────────────────
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* Header */}
-      <View className="px-6 py-4 border-b flex-row items-center justify-between" style={{ borderBottomColor: colors.border }}>
-        <View className="flex-row items-center">
-          <TouchableOpacity onPress={() => navigation.goBack()} className="mr-4">
-            <ArrowLeft size={24} color={colors.text.primary} />
-          </TouchableOpacity>
-          <View>
-            <Text className="text-xl font-outfit" style={{ color: colors.text.primary }}>
-              Business Verification
+      <Header title="Business Verification" subtitle="Get verified to unlock all features" colors={colors} />
+
+      <ScrollView contentContainerStyle={{ padding: 24 }} keyboardShouldPersistTaps="handled">
+
+        {/* ── Status Banner ── */}
+        <View style={{
+          flexDirection: 'row', alignItems: 'flex-start', padding: 16,
+          borderRadius: 16, marginBottom: 24,
+          backgroundColor: meta.bg,
+          borderWidth: 1, borderColor: meta.color + '40',
+        }}>
+          <meta.Icon size={20} color={meta.color} style={{ marginTop: 2 }} />
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={{ fontFamily: 'Outfit', fontWeight: '700', fontSize: 15, color: meta.color }}>
+              {meta.label}
             </Text>
-            <Text className="text-xs font-outfit mt-1" style={{ color: colors.text.secondary }}>
-              Verify your business to unlock features
-            </Text>
+            {displayStatus === 'pending' && (
+              <Text style={{ fontFamily: 'Outfit', fontSize: 13, color: colors.text.secondary, marginTop: 4 }}>
+                Our team will review your documents within 24–48 hours.
+              </Text>
+            )}
+            {displayStatus === 'approved' && (
+              <Text style={{ fontFamily: 'Outfit', fontSize: 13, color: colors.text.secondary, marginTop: 4 }}>
+                Your business is verified. You now have access to all vendor features.
+              </Text>
+            )}
+            {displayStatus === 'rejected' && (
+              <Text style={{ fontFamily: 'Outfit', fontSize: 13, color: colors.text.secondary, marginTop: 4 }}>
+                {verification?.rejection_reason ?? 'Please resubmit with correct documents.'}
+              </Text>
+            )}
           </View>
         </View>
-      </View>
 
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 24 }}>
-        {/* Status Card */}
-        {verification && (
-          <View
-            className="p-4 rounded-xl mb-6 border"
-            style={{
-              backgroundColor: colors.surface,
-              borderColor: getStatusColor(verification.status) + '30',
-            }}
-          >
-            <View className="flex-row items-center mb-2">
-              <StatusIcon size={20} color={getStatusColor(verification.status)} />
-              <Text className="text-base font-outfit font-bold ml-2" style={{ color: getStatusColor(verification.status) }}>
-                {verification.status === 'approved' ? 'Verified' : verification.status === 'pending' ? 'Under Review' : 'Rejected'}
-              </Text>
-            </View>
-            <Text className="text-sm font-outfit" style={{ color: colors.text.secondary }}>
-              {verification.status === 'approved' && 'Your business is verified! You have access to all features.'}
-              {verification.status === 'pending' && 'Your verification is under review. We\'ll notify you once approved.'}
-              {verification.status === 'rejected' && `Verification rejected: ${verification.rejection_reason || 'Please resubmit with correct documents'}`}
-            </Text>
+        {/* ── Business Selector ── */}
+        {businesses.length > 1 && (
+          <View style={{ marginBottom: 20 }}>
+            <Label text="SELECT BUSINESS" colors={colors} />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -4 }}>
+              {businesses.map(biz => {
+                const active = biz.id === selectedBusinessId;
+                return (
+                  <TouchableOpacity
+                    key={biz.id}
+                    onPress={() => handleSelectBusiness(biz.id)}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center',
+                      marginHorizontal: 4, paddingHorizontal: 16, paddingVertical: 12,
+                      borderRadius: 12, borderWidth: 1,
+                      backgroundColor: active ? colors.brand.blue : colors.surface,
+                      borderColor: active ? colors.brand.blue : colors.border,
+                    }}
+                  >
+                    {biz.is_verified && (
+                      <CheckCircle size={14} color={active ? '#fff' : '#10b981'} fill={active ? '#fff' : '#10b981'} />
+                    )}
+                    <Text style={{
+                      marginLeft: biz.is_verified ? 6 : 0,
+                      fontFamily: 'Outfit', fontSize: 14,
+                      color: active ? '#fff' : colors.text.primary,
+                    }}>
+                      {biz.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
         )}
 
-        {/* Business Selection */}
-        <View className="mb-6">
-          <Text className="text-xs font-outfit mb-3 uppercase tracking-wide" style={{ color: colors.text.tertiary }}>
-            Select Business to Verify
-          </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row -mx-1">
-            {businesses.map((business) => (
-              <TouchableOpacity
-                key={business.id}
-                onPress={() => handleBusinessChange(business.id)}
-                className="mx-1 px-4 py-3 rounded-lg flex-row items-center"
-                style={{
-                  backgroundColor: selectedBusinessId === business.id ? colors.brand.blue : colors.surface,
-                  borderWidth: 1,
-                  borderColor: selectedBusinessId === business.id ? colors.brand.blue : colors.border,
-                }}
-              >
-                {business.is_verified && (
-                  <CheckCircle
-                    size={16}
-                    color={selectedBusinessId === business.id ? '#ffffff' : '#10b981'}
-                    fill={selectedBusinessId === business.id ? '#ffffff' : '#10b981'}
-                  />
-                )}
-                <Text
-                  className="text-sm font-outfit ml-2"
-                  style={{ color: selectedBusinessId === business.id ? '#ffffff' : colors.text.primary }}
+        {/* ── Business Type ── */}
+        <View style={{ marginBottom: 20 }}>
+          <Label text="BUSINESS TYPE *" colors={colors} />
+          <View style={{ flexDirection: 'row', borderRadius: 14, padding: 4, backgroundColor: colors.input.background }}>
+            {(['pvt_ltd', 'local_business'] as const).map(type => {
+              const active = businessType === type;
+              return (
+                <TouchableOpacity
+                  key={type}
+                  onPress={() => canEdit && setBusinessType(type)}
+                  style={{
+                    flex: 1, paddingVertical: 12, borderRadius: 10,
+                    backgroundColor: active ? colors.brand.blue : 'transparent',
+                  }}
                 >
-                  {business.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-
-        {/* Business Type */}
-        <View className="mb-6">
-          <Text className="text-xs font-outfit mb-3 uppercase tracking-wide" style={{ color: colors.text.tertiary }}>
-            Business Type *
-          </Text>
-          <View className="flex-row rounded-xl p-1" style={{ backgroundColor: colors.input.background }}>
-            <TouchableOpacity
-              onPress={() => setBusinessType('pvt_ltd')}
-              disabled={isVerified || isPending}
-              className="flex-1 py-3 rounded-lg"
-              style={{ backgroundColor: businessType === 'pvt_ltd' ? colors.brand.blue : 'transparent' }}
-            >
-              <Text className="text-center text-sm font-outfit font-bold" style={{ color: businessType === 'pvt_ltd' ? '#ffffff' : colors.text.secondary }}>
-                Private Ltd
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setBusinessType('local_business')}
-              disabled={isVerified || isPending}
-              className="flex-1 py-3 rounded-lg"
-              style={{ backgroundColor: businessType === 'local_business' ? colors.brand.blue : 'transparent' }}
-            >
-              <Text className="text-center text-sm font-outfit font-bold" style={{ color: businessType === 'local_business' ? '#ffffff' : colors.text.secondary }}>
-                Local Business
-              </Text>
-            </TouchableOpacity>
+                  <Text style={{
+                    textAlign: 'center', fontFamily: 'Outfit', fontWeight: '700', fontSize: 14,
+                    color: active ? '#fff' : colors.text.secondary,
+                  }}>
+                    {type === 'pvt_ltd' ? 'Private Ltd' : 'Local Business'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
 
-        {/* BR Number */}
-        <View className="mb-4">
-          <Text className="text-xs font-outfit mb-2 uppercase tracking-wide" style={{ color: colors.text.tertiary }}>
-            Business Registration Number *
-          </Text>
+        {/* ── BR Number ── */}
+        <View style={{ marginBottom: 16 }}>
+          <Label text="BUSINESS REGISTRATION NUMBER *" colors={colors} />
           <TextInput
             value={brNumber}
             onChangeText={setBrNumber}
+            editable={canEdit}
             placeholder={businessType === 'pvt_ltd' ? 'PV00212345' : '123/2020/ABC'}
             placeholderTextColor={colors.text.tertiary}
-            editable={!isVerified && !isPending}
-            className="px-4 py-3 rounded-xl text-base font-outfit"
+            autoCapitalize="characters"
             style={{
-              backgroundColor: colors.input.background,
-              borderWidth: 1,
-              borderColor: colors.border,
-              color: colors.text.primary,
+              paddingHorizontal: 16, paddingVertical: 14, borderRadius: 14,
+              fontFamily: 'Outfit', fontSize: 15, color: colors.text.primary,
+              backgroundColor: colors.input.background, borderWidth: 1, borderColor: colors.border,
             }}
           />
-          <Text className="text-xs font-outfit mt-1" style={{ color: colors.text.tertiary }}>
-            {businessType === 'pvt_ltd' ? 'Format: PV followed by 8 digits' : 'Format: Number/Year/Code'}
+          <Text style={{ fontFamily: 'Outfit', fontSize: 11, marginTop: 4, color: colors.text.tertiary }}>
+            {businessType === 'pvt_ltd' ? 'Format: PV followed by 8 digits (e.g. PV00212345)' : 'Format: Number/Year/Code (e.g. 123/2020/ABC)'}
           </Text>
         </View>
 
-        {/* TIN Number (Optional) */}
-        <View className="mb-4">
-          <Text className="text-xs font-outfit mb-2 uppercase tracking-wide" style={{ color: colors.text.tertiary }}>
-            TIN Number (Optional)
-          </Text>
+        {/* ── TIN Number ── */}
+        <View style={{ marginBottom: 16 }}>
+          <Label text="TIN NUMBER (OPTIONAL)" colors={colors} />
           <TextInput
             value={tinNumber}
             onChangeText={setTinNumber}
+            editable={canEdit}
             placeholder="Tax Identification Number"
             placeholderTextColor={colors.text.tertiary}
-            editable={!isVerified && !isPending}
-            className="px-4 py-3 rounded-xl text-base font-outfit"
             style={{
-              backgroundColor: colors.input.background,
-              borderWidth: 1,
-              borderColor: colors.border,
-              color: colors.text.primary,
+              paddingHorizontal: 16, paddingVertical: 14, borderRadius: 14,
+              fontFamily: 'Outfit', fontSize: 15, color: colors.text.primary,
+              backgroundColor: colors.input.background, borderWidth: 1, borderColor: colors.border,
             }}
           />
         </View>
 
-        {/* SVAT Number (Optional) */}
-        <View className="mb-6">
-          <Text className="text-xs font-outfit mb-2 uppercase tracking-wide" style={{ color: colors.text.tertiary }}>
-            SVAT Number (Optional)
-          </Text>
+        {/* ── SVAT Number ── */}
+        <View style={{ marginBottom: 24 }}>
+          <Label text="SVAT NUMBER (OPTIONAL)" colors={colors} />
           <TextInput
             value={svatNumber}
             onChangeText={setSvatNumber}
+            editable={canEdit}
             placeholder="Service VAT Number"
             placeholderTextColor={colors.text.tertiary}
-            editable={!isVerified && !isPending}
-            className="px-4 py-3 rounded-xl text-base font-outfit"
             style={{
-              backgroundColor: colors.input.background,
-              borderWidth: 1,
-              borderColor: colors.border,
-              color: colors.text.primary,
+              paddingHorizontal: 16, paddingVertical: 14, borderRadius: 14,
+              fontFamily: 'Outfit', fontSize: 15, color: colors.text.primary,
+              backgroundColor: colors.input.background, borderWidth: 1, borderColor: colors.border,
             }}
           />
         </View>
 
-        {/* Document Upload */}
-        <View className="mb-6">
-          <Text className="text-xs font-outfit mb-3 uppercase tracking-wide" style={{ color: colors.text.tertiary }}>
-            Upload BR Certificate *
-          </Text>
+        {/* ── Document Upload ── */}
+        <View style={{ marginBottom: 24 }}>
+          <Label text="BR CERTIFICATE (PHOTO) *" colors={colors} />
           <TouchableOpacity
             onPress={handlePickDocument}
-            disabled={isVerified || isPending}
-            className="p-6 rounded-xl border-2 border-dashed items-center"
-            style={{ borderColor: colors.border, backgroundColor: colors.input.background }}
+            disabled={!canEdit}
+            style={{
+              borderRadius: 14, borderWidth: 2, borderStyle: 'dashed',
+              borderColor: docUri ? colors.brand.blue : colors.border,
+              backgroundColor: colors.input.background,
+              overflow: 'hidden',
+            }}
           >
-            {documentName ? (
-              <>
-                <FileText size={32} color={colors.brand.blue} />
-                <Text className="text-sm font-outfit mt-3 text-center" style={{ color: colors.text.primary }}>
-                  {documentName}
+            {docUri ? (
+              <View>
+                <Image source={{ uri: docUri }} style={{ width: '100%', height: 180 }} resizeMode="cover" />
+                {canEdit && (
+                  <View style={{ position: 'absolute', bottom: 10, right: 10, backgroundColor: colors.brand.blue, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
+                    <Text style={{ color: '#fff', fontFamily: 'Outfit', fontSize: 12, fontWeight: '700' }}>Change</Text>
+                  </View>
+                )}
+              </View>
+            ) : verification?.br_document_url && (displayStatus === 'pending' || displayStatus === 'approved') ? (
+              <View style={{ padding: 20, alignItems: 'center' }}>
+                <FileText size={36} color={colors.brand.blue} />
+                <Text style={{ fontFamily: 'Outfit', fontSize: 13, color: colors.text.primary, marginTop: 10 }}>
+                  Document already submitted
                 </Text>
-                <Text className="text-xs font-outfit mt-1" style={{ color: colors.text.secondary }}>
-                  Tap to change
-                </Text>
-              </>
+                {canEdit && (
+                  <Text style={{ fontFamily: 'Outfit', fontSize: 12, color: colors.text.tertiary, marginTop: 4 }}>
+                    Tap to replace
+                  </Text>
+                )}
+              </View>
             ) : (
-              <>
-                <Upload size={32} color={colors.text.tertiary} />
-                <Text className="text-sm font-outfit mt-3" style={{ color: colors.text.secondary }}>
-                  Tap to upload document
+              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                <Upload size={36} color={colors.text.tertiary} />
+                <Text style={{ fontFamily: 'Outfit', fontSize: 14, color: colors.text.secondary, marginTop: 12 }}>
+                  Tap to upload BR certificate photo
                 </Text>
-                <Text className="text-xs font-outfit mt-1" style={{ color: colors.text.tertiary }}>
-                  PDF or Image (Max 10MB)
+                <Text style={{ fontFamily: 'Outfit', fontSize: 12, color: colors.text.tertiary, marginTop: 4 }}>
+                  JPEG or PNG · Max 10 MB
                 </Text>
-              </>
+              </View>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* Info Box */}
-        <View className="p-4 rounded-xl mb-6" style={{ backgroundColor: colors.brand.blue + '15', borderWidth: 1, borderColor: colors.brand.blue + '30' }}>
-          <Text className="text-xs font-outfit font-bold mb-2" style={{ color: colors.text.primary }}>
-            📋 Required Documents:
+        {/* ── Info Box ── */}
+        <View style={{
+          padding: 16, borderRadius: 14, marginBottom: 28,
+          backgroundColor: colors.brand.blue + '12',
+          borderWidth: 1, borderColor: colors.brand.blue + '30',
+        }}>
+          <Text style={{ fontFamily: 'Outfit', fontWeight: '700', fontSize: 13, color: colors.text.primary, marginBottom: 6 }}>
+            Required documents
           </Text>
-          <Text className="text-xs font-outfit" style={{ color: colors.text.secondary }}>
-            • Business Registration Certificate{'\n'}
-            • Clear photo or PDF{'\n'}
-            • Valid and not expired{'\n'}
-            • Admin will review within 24-48 hours
-          </Text>
+          {[
+            'Clear photo of your Business Registration Certificate',
+            'Document must be valid and not expired',
+            'Admin will review within 24–48 hours',
+          ].map(line => (
+            <Text key={line} style={{ fontFamily: 'Outfit', fontSize: 12, color: colors.text.secondary, marginTop: 3 }}>
+              • {line}
+            </Text>
+          ))}
         </View>
 
-        {/* Submit Button */}
-        <TouchableOpacity
-          onPress={handleSubmitVerification}
-          disabled={submitting || isVerified || isPending}
-          className="py-4 rounded-xl flex-row items-center justify-center"
-          style={{
-            backgroundColor: isVerified || isPending ? colors.text.tertiary : colors.brand.blue,
-          }}
-        >
-          {submitting ? (
-            <>
-              <ActivityIndicator size="small" color="#ffffff" />
-              <Text className="text-white font-outfit font-bold ml-2">Submitting...</Text>
-            </>
-          ) : (
-            <>
-              <ShieldCheck size={20} color="#ffffff" />
-              <Text className="text-white font-outfit font-bold ml-2">
-                {isVerified ? 'Verified' : isPending ? 'Under Review' : 'Submit for Verification'}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        {isRejected && (
+        {/* ── Submit / Status Button ── */}
+        {isRejected ? (
+          // Rejected — show "Resubmit" and clear form so user can try again
           <TouchableOpacity
             onPress={() => {
               setVerification(null);
               setBrNumber('');
-              setDocumentUri(null);
-              setDocumentName(null);
-              setDocumentFile(null);
+              setTinNumber('');
+              setSvatNumber('');
+              setDocUri(null);
             }}
-            className="mt-4 py-4 rounded-xl flex-row items-center justify-center"
-            style={{ backgroundColor: colors.brand.blue + '20', borderWidth: 1, borderColor: colors.brand.blue }}
+            style={{
+              paddingVertical: 16, borderRadius: 14, borderWidth: 1.5,
+              borderColor: colors.brand.blue, backgroundColor: colors.brand.blue + '15',
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+            }}
           >
-            <Text className="font-outfit font-bold" style={{ color: colors.brand.blue }}>
+            <RefreshCw size={18} color={colors.brand.blue} />
+            <Text style={{ fontFamily: 'Outfit', fontWeight: '700', fontSize: 16, color: colors.brand.blue, marginLeft: 8 }}>
               Resubmit Verification
             </Text>
           </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            onPress={handleSubmit}
+            disabled={submitting || isVerified || isPending}
+            style={{
+              paddingVertical: 16, borderRadius: 14,
+              backgroundColor: isVerified || isPending ? colors.text.tertiary : colors.brand.blue,
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            {submitting ? (
+              <>
+                <ActivityIndicator size="small" color="#fff" />
+                <Text style={{ fontFamily: 'Outfit', fontWeight: '700', fontSize: 16, color: '#fff', marginLeft: 10 }}>
+                  Uploading…
+                </Text>
+              </>
+            ) : (
+              <>
+                <ShieldCheck size={20} color="#fff" />
+                <Text style={{ fontFamily: 'Outfit', fontWeight: '700', fontSize: 16, color: '#fff', marginLeft: 10 }}>
+                  {isVerified ? 'Already Verified' : isPending ? 'Under Review' : 'Submit for Verification'}
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
         )}
+
+        <View style={{ height: 32 }} />
       </ScrollView>
     </SafeAreaView>
   );
 };
+
+// ─── Small sub-components ─────────────────────────────────────────────────────
+
+const Header = ({
+  title, subtitle, colors,
+}: {
+  title: string; subtitle?: string; colors: any;
+}) => {
+  const navigation = useNavigation();
+  return (
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14,
+      borderBottomWidth: 1, borderBottomColor: colors.border,
+    }}>
+      <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginRight: 14, padding: 4 }}>
+        <ArrowLeft size={22} color={colors.text.primary} />
+      </TouchableOpacity>
+      <View>
+        <Text style={{ fontFamily: 'Outfit', fontSize: 20, color: colors.text.primary }}>{title}</Text>
+        {subtitle && (
+          <Text style={{ fontFamily: 'Outfit', fontSize: 12, color: colors.text.secondary, marginTop: 2 }}>
+            {subtitle}
+          </Text>
+        )}
+      </View>
+    </View>
+  );
+};
+
+const Label = ({ text, colors }: { text: string; colors: any }) => (
+  <Text style={{
+    fontFamily: 'Outfit', fontSize: 10, letterSpacing: 1, textTransform: 'uppercase',
+    color: colors.text.tertiary, marginBottom: 8,
+  }}>
+    {text}
+  </Text>
+);

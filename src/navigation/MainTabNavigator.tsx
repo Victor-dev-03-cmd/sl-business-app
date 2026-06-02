@@ -15,6 +15,8 @@ import { NotificationsScreen } from '../screens/Notifications/NotificationsScree
 import { AccountInfoScreen } from '../screens/Account/AccountInfoScreen';
 import { LanguageScreen } from '../screens/Settings/LanguageScreen';
 import { PrivacySecurityScreen } from '../screens/Settings/PrivacySecurityScreen';
+import { VendorVerificationScreen } from '../screens/Vendor/VendorVerificationScreen';
+import { AllBusinessesScreen } from '../screens/Business/AllBusinessesScreen';
 import { Session } from '@supabase/supabase-js';
 import { useTheme } from '../context/ThemeContext';
 import { Colors } from '../theme/colors';
@@ -121,6 +123,7 @@ const HomeStack = () => {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="HomeMain" component={HomeScreen} />
+      <Stack.Screen name="AllBusinesses" component={AllBusinessesScreen} />
       <Stack.Screen name="BusinessNews" component={BusinessNewsScreen} />
       <Stack.Screen name="BusinessDetails" component={BusinessDetailsScreen} />
       <Stack.Screen name="QRScanner" component={QRScannerScreen} />
@@ -169,6 +172,7 @@ const AccountStack = ({ session }: { session: Session | null }) => {
       </Stack.Screen>
       <Stack.Screen name="Language" component={LanguageScreen} />
       <Stack.Screen name="PrivacySecurity" component={PrivacySecurityScreen} />
+      <Stack.Screen name="VendorVerification" component={VendorVerificationScreen} />
     </Stack.Navigator>
   );
 };

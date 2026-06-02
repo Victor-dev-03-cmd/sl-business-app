@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { View, Text, TextInput, ScrollView, TouchableOpacity, Image, ActivityIndicator, FlatList, Keyboard, Modal, Pressable, Dimensions, InteractionManager } from 'react-native';
+import { View, Text, TextInput, ScrollView, RefreshControl, TouchableOpacity, Image, ActivityIndicator, FlatList, Keyboard, Modal, Pressable, Dimensions, InteractionManager } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, Bell, User, ScanLine, Package, Star, MapPin, ChevronRight, ArrowLeft, Globe, BookOpenText, Settings, Newspaper, Tags, Briefcase, Building2, X } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
@@ -36,6 +36,7 @@ export const HomeScreen = () => {
   const [bizLoading, setBizLoading] = useState(true);
   const [catLoading, setCatLoading] = useState(true);
   const [newsLoading, setNewsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<CategoryGroup | null>(null);
   const [dynamicSubcategories, setDynamicSubcategories] = useState<Record<string, any[]>>({});
   const [userName, setUserName] = useState<string>('Guest');
@@ -95,6 +96,18 @@ export const HomeScreen = () => {
     fetchCategories();
     fetchBusinessNews();
     fetchUnreadNotifications();
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([
+      fetchUserProfile(),
+      fetchFeaturedBusinesses(),
+      fetchCategories(),
+      fetchBusinessNews(),
+      fetchUnreadNotifications(),
+    ]);
+    setRefreshing(false);
   }, []);
 
   // Auto-reset search when returning to home screen
@@ -703,10 +716,18 @@ export const HomeScreen = () => {
           </View>
         </View>
 
-        <ScrollView 
-          showsVerticalScrollIndicator={false} 
+        <ScrollView
+          showsVerticalScrollIndicator={false}
           className="z-0"
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.brand.blue}
+              colors={[colors.brand.blue]}
+            />
+          }
         >
 
         {/* Featured Card Section (News) */}
@@ -918,7 +939,7 @@ export const HomeScreen = () => {
         <View className="px-6 py-4">
           <View className="flex-row justify-between items-center mb-4">
             <Text className="text-xl font-outfit" style={{ color: colors.text.primary }}>Featured Businesses</Text>
-            <TouchableOpacity>
+            <TouchableOpacity onPress={() => navigation.navigate('AllBusinesses' as never)}>
               <Text className="text-lg font-outfit" style={{ color: colors.brand.blue }}>See all</Text>
             </TouchableOpacity>
           </View>

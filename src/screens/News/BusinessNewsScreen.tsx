@@ -35,26 +35,12 @@ import { useTheme } from '../../context/ThemeContext';
 import { Colors } from '../../theme/colors';
 import { formatPhoneWithCountryCode, formatPhoneForWhatsApp } from '../../utils/phoneHelpers';
 import { AddNewsModal } from '../../components/AddNewsModal';
+import { NewsDetailModal } from '../../components/NewsDetailModal';
+import { EditNewsModal } from '../../components/EditNewsModal';
+import type { NewsPost as NewsPostType } from '../../components/NewsDetailModal';
 
-interface NewsPost {
-  id: string;
-  title: string;
-  content: string;
-  contact_phone: string;
-  created_at: string;
-  business_id: string;
-  owner_id: string;
-  category: string;
-  district: string;
-  post_type: 'hiring' | 'looking';
-  images: string[];
-  businesses: {
-    name: string;
-    logo_url: string;
-    is_verified: boolean;
-    status: string;
-  } | null;
-}
+// Use the shared type from NewsDetailModal (re-exported for this screen)
+type NewsPost = NewsPostType;
 
 export const BusinessNewsScreen = () => {
   const { theme } = useTheme();
@@ -68,6 +54,12 @@ export const BusinessNewsScreen = () => {
   const [filterType, setFilterType] = useState<string>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [hasVerifiedBusiness, setHasVerifiedBusiness] = useState(false);
+  const [hasAnyBusiness, setHasAnyBusiness] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [selectedPost, setSelectedPost] = useState<NewsPost | null>(null);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [editingPost, setEditingPost] = useState<NewsPost | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   const MAIN_CATEGORY_GROUPS = [
     "Manpower Services",
@@ -97,22 +89,28 @@ export const BusinessNewsScreen = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setHasVerifiedBusiness(false);
+        setHasAnyBusiness(false);
+        setCurrentUserId(null);
         return;
       }
+      setCurrentUserId(user.id);
 
+      // Single query — fetch is_verified so we can derive both states at once
       const { data, error } = await supabase
         .from('businesses')
-        .select('id')
+        .select('id, is_verified')
         .eq('owner_id', user.id)
-        .eq('is_verified', true)
-        .eq('status', 'approved')
-        .limit(1);
+        .eq('status', 'approved');
 
       if (error) throw error;
-      setHasVerifiedBusiness(!!(data && data.length > 0));
+
+      const businesses = data ?? [];
+      setHasAnyBusiness(businesses.length > 0);
+      setHasVerifiedBusiness(businesses.some(b => b.is_verified === true));
     } catch (error) {
       console.error('Error checking verified business:', error);
       setHasVerifiedBusiness(false);
+      setHasAnyBusiness(false);
     }
   };
 
@@ -162,28 +160,8 @@ export const BusinessNewsScreen = () => {
   };
 
   const handlePostPress = (post: NewsPost) => {
-    // Show contact options
-    Alert.alert(
-      post.title,
-      `Contact: ${post.contact_phone}\n\nCategory: ${post.category}\nDistrict: ${post.district}`,
-      [
-        {
-          text: 'Call',
-          onPress: () => {
-            const formattedPhone = formatPhoneWithCountryCode(post.contact_phone);
-            Linking.openURL(`tel:${formattedPhone}`);
-          }
-        },
-        {
-          text: 'WhatsApp',
-          onPress: () => {
-            const formattedPhone = formatPhoneForWhatsApp(post.contact_phone);
-            Linking.openURL(`https://wa.me/${formattedPhone}`);
-          }
-        },
-        { text: 'Cancel', style: 'cancel' }
-      ]
-    );
+    setSelectedPost(post);
+    setShowDetailModal(true);
   };
 
   const formatTime = (dateString: string) => {
@@ -616,13 +594,31 @@ export const BusinessNewsScreen = () => {
         )}
       </ScrollView>
 
-      {/* Floating Add News Button - Only for verified vendors */}
-      {hasVerifiedBusiness && (
+      {/* Floating Add News Button — visible to all vendors, verified or not */}
+      {hasAnyBusiness && (
         <TouchableOpacity
-          onPress={() => setShowAddModal(true)}
-          className="absolute bottom-6 right-6 w-16 h-16 rounded-full items-center justify-center shadow-lg"
+          onPress={() => {
+            if (hasVerifiedBusiness) {
+              setShowAddModal(true);
+            } else {
+              Alert.alert(
+                'Verification Required',
+                'Only verified businesses can post news updates. Would you like to get your business verified now?',
+                [
+                  { text: 'Not Now', style: 'cancel' },
+                  {
+                    text: 'Get Verified',
+                    onPress: () => (navigation as any).navigate('Account', {
+                      screen: 'VendorVerification',
+                    }),
+                  },
+                ]
+              );
+            }
+          }}
+          className="absolute bottom-6 right-6 w-16 h-16 rounded-full items-center justify-center"
           style={{
-            backgroundColor: colors.brand.blue,
+            backgroundColor: hasVerifiedBusiness ? colors.brand.blue : colors.brand.gold,
             shadowColor: '#000',
             shadowOffset: { width: 0, height: 4 },
             shadowOpacity: 0.3,
@@ -641,6 +637,33 @@ export const BusinessNewsScreen = () => {
         onSuccess={() => {
           fetchNews();
           checkVerifiedBusiness();
+        }}
+      />
+
+      {/* Full-view detail popup */}
+      <NewsDetailModal
+        post={selectedPost}
+        currentUserId={currentUserId}
+        visible={showDetailModal}
+        onClose={() => setShowDetailModal(false)}
+        onEdit={(post) => {
+          setEditingPost(post);
+          setShowEditModal(true);
+        }}
+        onDeleted={() => {
+          fetchNews();
+          setSelectedPost(null);
+        }}
+      />
+
+      {/* Edit post modal */}
+      <EditNewsModal
+        post={editingPost}
+        visible={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        onSaved={() => {
+          fetchNews();
+          setShowEditModal(false);
         }}
       />
     </SafeAreaView>
